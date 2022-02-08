@@ -7,6 +7,7 @@ using Alkahest.Core.Net.Game.Serialization;
 using Alkahest.Core.Plugins;
 using Mono.Options;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -19,13 +20,30 @@ namespace Alkahest.Commands
 {
     sealed class ServeCommand : AlkahestCommand
     {
+        sealed class ServerInstance
+        {
+            public ServerListProxy ServerListProxy { get; }
+
+            public PluginLoader Loader { get; }
+
+            public IEnumerable<GameProxy> Proxies { get; }
+
+            public ServerInstance(ServerListProxy slsProxy, PluginLoader loader,
+                IEnumerable<GameProxy> proxies)
+            {
+                ServerListProxy = slsProxy;
+                Loader = loader;
+                Proxies = proxies;
+            }
+        }
+
         static readonly Log _log = new Log(typeof(ServeCommand));
 
         public override GCLatencyMode LatencyMode => GCLatencyMode.SustainedLowLatency;
 
         bool _cleanup;
 
-        readonly ManualResetEventSlim _running = new ManualResetEventSlim();
+        readonly ManualResetEventSlim _exiting = new ManualResetEventSlim();
 
         readonly ManualResetEventSlim _exited = new ManualResetEventSlim();
 
@@ -46,27 +64,105 @@ namespace Alkahest.Commands
             };
         }
 
+        protected override ConsoleLogger CreateConsoleLogger()
+        {
+            return Configuration.Loggers.Contains(ConsoleLogger.Name) ? new ConsoleLogger(
+                true, true, true, Configuration.ColorsEnabled, Configuration.ErrorColor,
+                Configuration.WarningColor, Configuration.BasicColor, Configuration.InfoColor,
+                Configuration.DebugColor) : null;
+        }
+
+        static ServerInstance StartServer(Region region, HostsFileManager hosts)
+        {
+            _log.Basic("{0} proxy server starting...", region);
+
+            var sls = ServerListParameters.Uris[region];
+            var slsPort = Configuration.ServerListPort;
+
+            if (slsPort == 0)
+                slsPort = sls.Port;
+
+            var slsHost = sls.Host;
+            var slsAddress = Configuration.ServerListBaseAddress;
+
+            hosts?.RemoveEntry(slsHost, slsAddress);
+
+            var real = Dns.GetHostEntry(slsHost).AddressList[0];
+
+            _log.Info("Resolved {0} server list address: {1} -> {2}", region, slsHost, real);
+
+            hosts?.AddEntry(slsHost, slsAddress);
+
+            var slsProxy = new ServerListProxy(new ServerListParameters(real,
+                Configuration.ServerListBaseAddress, slsPort, Configuration.GameBaseAddress,
+                Configuration.GameBasePort, region, Configuration.ServerListTimeout,
+                Configuration.ServerListRetries));
+
+            var pool = new ObjectPool<SocketAsyncEventArgs>(() => new SocketAsyncEventArgs(),
+                x => x.Reset(), Configuration.PoolLimit != 0 ? (int?)Configuration.PoolLimit : null);
+            var version = DataCenter.ClientVersions[region];
+            var serializer = new CompilerPacketSerializer(region, new GameMessageTable(version),
+                new SystemMessageTable(version));
+            var proxies = slsProxy.Servers.Select(x => new GameProxy(x, pool, serializer,
+                Configuration.GameBacklog, Configuration.GameMaxClients, Configuration.GameTimeout))
+                .ToArray();
+
+            var path = Path.ChangeExtension(Path.Combine(Configuration.AssetDirectory,
+                DataCenter.FileNames[region]), DataCenter.UnpackedExtension);
+            using var file = File.Exists(path) ? File.OpenRead(path) : null;
+            var dc = file == null ? new DataCenter(version) : new DataCenter(file,
+                Configuration.DataCenterMode, Configuration.DataCenterStringOptions);
+            var loader = new PluginLoader(new PluginContext(region, dc, proxies),
+                Configuration.PluginDirectory, Configuration.PluginPattern, Configuration.DisablePlugins);
+
+            loader.Start();
+
+            if (Configuration.ServerListEnabled)
+                slsProxy.Start();
+
+            foreach (var proxy in proxies)
+                proxy.Start();
+
+            _log.Basic("{0} proxy server started", region);
+
+            return new ServerInstance(slsProxy, loader, proxies);
+        }
+
+        static void StopServer(ServerInstance server)
+        {
+            var region = server.ServerListProxy.Parameters.Region;
+
+            _log.Basic("{0} proxy server stopping...", region);
+
+            foreach (var proxy in server.Proxies)
+                proxy.Dispose();
+
+            server.ServerListProxy.Dispose();
+
+            server.Loader.Stop();
+
+            _log.Basic("{0} proxy server stopped", region);
+        }
+
         protected override int Invoke(string[] args)
         {
+            using var hosts = Configuration.AdjustHostsFile ? new HostsFileManager() : null;
+            using var certs = Configuration.AdjustCertificateStore ? new CertificateManager(443) : null;
+
             if (_cleanup)
             {
-                var sls = ServerListParameters.Uris[Configuration.Region];
-                var slsPort = Configuration.ServerListPort;
+                _log.Basic("Cleaning up proxy server system changes...");
 
-                if (slsPort == 0)
-                    slsPort = sls.Port;
-
-                using var hostsMgr = Configuration.AdjustHostsFile ? new HostsFileManager() : null;
-                using var certMgr = Configuration.AdjustCertificateStore && sls.Scheme == Uri.UriSchemeHttps ?
-                    new CertificateManager(slsPort) : null;
-
-                hostsMgr?.RemoveEntry(sls.Host, Configuration.ServerListBaseAddress);
+                foreach (var region in Configuration.Regions)
+                    hosts?.RemoveEntry(ServerListParameters.Uris[region].Host,
+                        Configuration.ServerListBaseAddress);
 
                 return 0;
             }
 
             if (Configuration.Loggers.Contains(FileLogger.Name))
-                Log.Loggers.Add(new FileLogger(Configuration.LogDirectory, Configuration.LogFileNameFormat));
+                Log.Loggers.Add(new FileLogger(true, true, true, Configuration.LogDirectory,
+                    Configuration.LogFileNameFormat));
 
             try
             {
@@ -74,75 +170,18 @@ namespace Alkahest.Commands
                 Console.CancelKeyPress += CancelKeyPress;
                 ConsoleUtility.AddConsoleEventHandler(ConsoleEvent);
 
-                _log.Basic("Proxy server starting...");
+                certs?.Activate();
 
-                var region = Configuration.Region;
-                var sls = ServerListParameters.Uris[region];
-                var slsPort = Configuration.ServerListPort;
+                var servers = Configuration.Regions.Select(x => StartServer(x, hosts)).ToArray();
 
-                if (slsPort == 0)
-                    slsPort = sls.Port;
+                _log.Basic("{0} server started", nameof(Alkahest));
 
-                using var hostsMgr = Configuration.AdjustHostsFile ? new HostsFileManager() : null;
-                using var certMgr = Configuration.AdjustCertificateStore && sls.Scheme == Uri.UriSchemeHttps ?
-                    new CertificateManager(slsPort) : null;
+                _exiting.Wait();
 
-                var slsHost = sls.Host;
-                var slsAddress = Configuration.ServerListBaseAddress;
-
-                hostsMgr?.RemoveEntry(slsHost, slsAddress);
-
-                var real = Dns.GetHostEntry(slsHost).AddressList[0];
-
-                _log.Basic("Resolved official server list address: {0} -> {1}", slsHost, real);
-
-                hostsMgr?.AddEntry(slsHost, slsAddress);
-
-                using var slsProxy = new ServerListProxy(new ServerListParameters(real,
-                    Configuration.ServerListBaseAddress, slsPort, Configuration.GameBaseAddress,
-                    Configuration.GameBasePort, region, Configuration.ServerListTimeout,
-                    Configuration.ServerListRetries));
-
-                if (Configuration.ServerListEnabled)
-                    slsProxy.Start();
-
-                var pool = new ObjectPool<SocketAsyncEventArgs>(() => new SocketAsyncEventArgs(),
-                    x => x.Reset(), Configuration.PoolLimit != 0 ? (int?)Configuration.PoolLimit : null);
-                var version = DataCenter.Versions[region];
-                var proc = new PacketProcessor(new CompilerPacketSerializer(region,
-                    new GameMessageTable(version), new SystemMessageTable(version)));
-                var proxies = slsProxy.Servers.Select(x => new GameProxy(x, pool, proc,
-                    Configuration.GameBacklog, Configuration.GameTimeout)
-                {
-                    MaxClients = Configuration.GameMaxClients,
-                }).ToArray();
-
-                foreach (var proxy in proxies)
-                    proxy.Start();
-
-                var path = Path.ChangeExtension(Path.Combine(Configuration.AssetDirectory,
-                    DataCenter.FileNames[region]), ".dec");
-                var loader = new PluginLoader(new PluginContext(File.Exists(path) ?
-                    new DataCenter(path, Configuration.DataCenterInterning) :
-                    new DataCenter(version)), Configuration.PluginDirectory,
-                    Configuration.PluginPattern, Configuration.DisablePlugins);
-
-                loader.Start(proxies);
-
-                _log.Basic("Proxy server started");
-
-                _running.Wait();
-
-                _log.Basic("Proxy server stopping...");
-
-                loader.Stop(proxies);
-
-                foreach (var proxy in proxies)
-                    proxy.Dispose();
+                foreach (var server in servers)
+                    StopServer(server);
 
                 _exited.Set();
-
-                _log.Basic("Proxy server stopped");
             }
             finally
             {
@@ -151,12 +190,14 @@ namespace Alkahest.Commands
                 AppDomain.CurrentDomain.ProcessExit -= ProcessExit;
             }
 
+            _log.Basic("{0} server stopped", nameof(Alkahest));
+
             return 0;
         }
 
         void Stop()
         {
-            _running.Set();
+            _exiting.Set();
             _exited.Wait();
         }
 

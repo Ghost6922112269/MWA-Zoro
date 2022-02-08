@@ -1,4 +1,5 @@
 using Alkahest.Core.Logging;
+using Alkahest.Core.Net.Game.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,11 +17,22 @@ namespace Alkahest.Core.Net.Game
 
         internal ObjectPool<SocketAsyncEventArgs> ArgsPool { get; }
 
-        public PacketProcessor Processor { get; }
+        public PacketSerializer Serializer { get; }
 
-        public int MaxClients { get; set; }
+        public int Backlog { get; }
+
+        public int MaxClients { get; }
 
         public TimeSpan Timeout { get; }
+
+        public IReadOnlyCollection<GameClient> Clients
+        {
+            get
+            {
+                lock (_clients)
+                    return _clients.ToArray();
+            }
+        }
 
         readonly HashSet<GameClient> _clients = new HashSet<GameClient>();
 
@@ -28,40 +40,50 @@ namespace Alkahest.Core.Net.Game
 
         readonly Socket _serverSocket;
 
-        readonly int _backlog;
-
         bool _disposed;
 
+        public event EventHandler<GameClient> ClientConnected;
+
+        public event EventHandler<GameClient> ClientDisconnected;
+
+        public event RefEventHandler<PacketEventArgs> PacketReceived;
+
+        public event RefEventHandler<PacketEventArgs> PacketSent;
+
         public GameProxy(ServerInfo info, ObjectPool<SocketAsyncEventArgs> pool,
-            PacketProcessor processor, int backlog, TimeSpan timeout)
+            PacketSerializer serializer, int backlog, int maxClients, TimeSpan timeout)
         {
             if (backlog < 0)
                 throw new ArgumentOutOfRangeException(nameof(backlog));
 
+            if (maxClients < 1)
+                throw new ArgumentOutOfRangeException(nameof(maxClients));
+
             Info = info ?? throw new ArgumentNullException(nameof(info));
             ArgsPool = pool ?? throw new ArgumentNullException(nameof(pool));
-            Processor = processor ?? throw new ArgumentNullException(nameof(processor));
+            Serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+            Backlog = backlog;
+            MaxClients = maxClients;
             Timeout = timeout;
             _serverSocket = new Socket(info.ProxyEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
             {
                 ExclusiveAddressUse = true,
                 NoDelay = true,
             };
-            _backlog = backlog;
         }
 
         ~GameProxy()
         {
-            RealDispose();
+            RealDispose(false);
         }
 
         public void Dispose()
         {
-            RealDispose();
+            RealDispose(true);
             GC.SuppressFinalize(this);
         }
 
-        void RealDispose()
+        void RealDispose(bool disposing)
         {
             if (_disposed)
                 return;
@@ -78,13 +100,17 @@ namespace Alkahest.Core.Net.Game
             foreach (var client in _clients.ToArray())
                 client.Disconnect();
 
-            _log.Basic("Game proxy for {0} stopped", Info.Name);
+            if (disposing)
+                _log.Basic("Game proxy for {0} stopped", Info.Name);
         }
 
         public void Start()
         {
+            if (_disposed)
+                throw new ObjectDisposedException(GetType().FullName);
+
             _serverSocket.Bind(Info.ProxyEndPoint);
-            _serverSocket.Listen(_backlog);
+            _serverSocket.Listen(Backlog);
 
             Accept();
 
@@ -152,6 +178,47 @@ namespace Alkahest.Core.Net.Game
         {
             lock (_clients)
                 _clients.Remove(client);
+        }
+
+        internal void InvokeConnected(GameClient client)
+        {
+            ClientConnected?.Invoke(this, client);
+        }
+
+        internal void InvokeDisconnected(GameClient client)
+        {
+            ClientDisconnected?.Invoke(this, client);
+        }
+
+        bool InvokePacketEvent(RefEventHandler<PacketEventArgs> handler, GameClient client,
+            Direction direction, ushort code, ref Memory<byte> payload, bool direct)
+        {
+            if (handler == null)
+                return true;
+
+            var args = new PacketEventArgs(client, direction, code,
+                direct ? payload.ToArray() : payload);
+
+            handler(this, ref args);
+
+            if (direct)
+                return true;
+
+            payload = args.Payload;
+
+            return !args.Silence;
+        }
+
+        internal bool InvokeReceived(GameClient client, Direction direction, ushort code,
+            ref Memory<byte> payload)
+        {
+            return InvokePacketEvent(PacketReceived, client, direction, code, ref payload, false);
+        }
+
+        internal bool InvokeSent(GameClient client, Direction direction, ushort code,
+            ref Memory<byte> payload, bool direct)
+        {
+            return InvokePacketEvent(PacketSent, client, direction, code, ref payload, direct);
         }
     }
 }

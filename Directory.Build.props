@@ -1,0 +1,35 @@
+<Project>
+  <PropertyGroup>
+    <Company>Alex Rønne Petersen</Company>
+    <Copyright>ISC License (No Attribution)</Copyright>
+    <Description>An extensible TERA proxy server.</Description>
+    <Product>Alkahest</Product>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.2.0</FileVersion>
+    <Version>1.2.0</Version>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CodeAnalysisRuleSet>..\Alkahest.ruleset</CodeAnalysisRuleSet>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'True'">true</ContinuousIntegrationBuild>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>embedded</DebugType>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <Deterministic>true</Deterministic>
+    <EmbedAllSources>true</EmbedAllSources>
+    <LangVersion>8.0</LangVersion>
+    <OutputPath>..\Build\</OutputPath>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <PropertyGroup>
+    <Authors>$(Company)</Authors>
+    <IsPackable>false</IsPackable>
+    <PackageIconUrl>https://raw.githubusercontent.com/tera-alkahest/alkahest/master/Alkahest.ico</PackageIconUrl>
+    <PackageLicenseFile>LICENSE.md</PackageLicenseFile>
+    <PackageOutputPath>..\Build\</PackageOutputPath>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+</Project>

@@ -1,4 +1,5 @@
 using Alkahest.Core;
+using Alkahest.Core.Data;
 using Alkahest.Core.Logging;
 using System;
 using System.Configuration;
@@ -41,17 +42,25 @@ namespace Alkahest
 
         public static Uri PackageRegistryUri { get; }
 
-        public static string CSharpPackageDirectory { get; }
-
-        public static string PythonPackageDirectory { get; }
+        public static string PackageDirectory { get; }
 
         public static Uri AssetManifestUri { get; }
 
         public static string AssetDirectory { get; }
 
-        public static bool DataCenterInterning { get; }
+        public static TimeSpan AssetTimeout { get; }
 
-        public static Region Region { get; }
+        public static string UpgradeDirectory { get; }
+
+        public static string UpgradeOwner { get; }
+
+        public static string UpgradeRepository { get; }
+
+        public static DataCenterMode DataCenterMode { get; }
+
+        public static DataCenterStringOptions DataCenterStringOptions { get; }
+
+        public static Region[] Regions { get; }
 
         public static bool ServerListEnabled { get; }
 
@@ -99,12 +108,18 @@ namespace Alkahest
             PluginPattern = cfg["pluginPattern"];
             DisablePlugins = Split(cfg["disablePlugins"], ',');
             PackageRegistryUri = new Uri(cfg["packageRegistryUri"]);
-            CSharpPackageDirectory = cfg["csharpPackageDirectory"];
-            PythonPackageDirectory = cfg["pythonPackageDirectory"];
+            PackageDirectory = cfg["packageDirectory"];
             AssetManifestUri = new Uri(cfg["assetManifestUri"]);
             AssetDirectory = cfg["assetDirectory"];
-            DataCenterInterning = bool.Parse(cfg["dataCenterInterning"]);
-            Region = (Region)Enum.Parse(typeof(Region), cfg["region"], true);
+            AssetTimeout = TimeSpan.FromMinutes(int.Parse(cfg["assetTimeout"]));
+            UpgradeDirectory = cfg["upgradeDirectory"];
+            UpgradeOwner = cfg["upgradeOwner"];
+            UpgradeRepository = cfg["upgradeRepository"];
+            DataCenterMode = (DataCenterMode)Enum.Parse(typeof(DataCenterMode),
+                cfg["dataCenterMode"], true);
+            DataCenterStringOptions = (DataCenterStringOptions)Enum.Parse(typeof(DataCenterStringOptions),
+                cfg["dataCenterStringOptions"], true);
+            Regions = Split(cfg["regions"], ',').Select(x => (Region)Enum.Parse(typeof(Region), x, true)).ToArray();
             ServerListEnabled = bool.Parse(cfg["enableSls"]);
             ServerListBaseAddress = IPAddress.Parse(cfg["slsBaseAddress"]);
             GameBaseAddress = IPAddress.Parse(cfg["gameBaseAddress"]);

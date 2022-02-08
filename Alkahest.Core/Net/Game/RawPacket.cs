@@ -8,22 +8,24 @@ namespace Alkahest.Core.Net.Game
     {
         public string Name { get; }
 
-        public byte[] Payload { get; set; }
+        public Memory<byte> Payload { get; set; }
 
         public RawPacket(string name)
         {
-            Name = name ?? throw new ArgumentNullException(nameof(name));
+            Name = name;
         }
 
-        public override string ToString()
+        internal static void ToString(StringBuilder builder, ReadOnlyMemory<byte> data, string indent)
         {
+            var bytes = data.ToEnumerable().WithIndex();
             var hex = new StringBuilder();
+            var length = data.Length;
 
-            foreach (var (i, x) in Payload.WithIndex())
+            foreach (var (i, x) in bytes)
             {
                 hex.Append($"{x:X2}");
 
-                if (i != Payload.Length - 1)
+                if (i != length - 1)
                 {
                     if ((i + 1) % 16 != 0)
                         hex.Append(" ");
@@ -34,35 +36,40 @@ namespace Alkahest.Core.Net.Game
 
             var text = new StringBuilder();
 
-            foreach (var (i, x) in Payload.WithIndex())
+            foreach (var (i, x) in bytes)
             {
                 var ch = (char)x;
 
                 text.Append(!char.IsControl(ch) && !char.IsWhiteSpace(ch) ? ch : '.');
 
-                if (i != Payload.Length - 1 && (i + 1) % 16 == 0)
+                if (i != length - 1 && (i + 1) % 16 == 0)
                     text.AppendLine();
             }
 
             var hexLines = hex.ToString().Split(new[] { Environment.NewLine },
                 StringSplitOptions.RemoveEmptyEntries);
-
             var textLines = text.ToString().Split(new[] { Environment.NewLine },
                 StringSplitOptions.RemoveEmptyEntries);
 
-            var final = new StringBuilder();
-
             foreach (var (i, line) in hexLines.WithIndex())
             {
-                final.Append($"{i * 16:X4}:  ");
-                final.AppendFormat($"{line,-47}  ");
-                final.Append(textLines[i]);
+                builder.Append(indent);
+                builder.Append($"{i * 16:X4}:  ");
+                builder.AppendFormat($"{line,-47}  ");
+                builder.Append(textLines[i]);
 
                 if (i != hexLines.Length - 1)
-                    final.AppendLine();
+                    builder.AppendLine();
             }
+        }
 
-            return final.ToString();
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+
+            ToString(sb, Payload, string.Empty);
+
+            return sb.ToString();
         }
     }
 }

@@ -1,15 +1,20 @@
 using Alkahest.Core.Logging;
-using Alkahest.Core.Net.Game;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Composition.Hosting;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 
 namespace Alkahest.Core.Plugins
 {
     public sealed class PluginLoader
     {
+        const BindingFlags ConstructorFlags =
+            BindingFlags.DeclaredOnly |
+            BindingFlags.Instance |
+            BindingFlags.Public |
+            BindingFlags.NonPublic;
+
         const string ClassSuffix = "Plugin";
 
         const string NamespacePrefix = "Alkahest.Plugins.";
@@ -18,9 +23,9 @@ namespace Alkahest.Core.Plugins
 
         public PluginContext Context { get; }
 
-        public IReadOnlyCollection<IPlugin> Plugins => _plugins;
+        public IReadOnlyCollection<IPlugin> Plugins { get; }
 
-        readonly IPlugin[] _plugins;
+        bool _started;
 
         public PluginLoader(PluginContext context, string directory, string pattern, string[] exclude)
         {
@@ -28,20 +33,19 @@ namespace Alkahest.Core.Plugins
 
             Directory.CreateDirectory(directory);
 
-            using var container = new CompositionContainer(
-                new DirectoryCatalog(directory, pattern), true);
-
             if (exclude == null)
                 exclude = Array.Empty<string>();
 
-            _plugins = container.GetExports<IPlugin>().Select(x => x.Value)
-                .Where(x => !exclude.Contains(x.Name)).ToArray();
-
-            foreach (var plugin in _plugins)
-                EnforceConventions(plugin);
+            Plugins = (from file in Directory.EnumerateFiles(directory, pattern)
+                       from type in Assembly.UnsafeLoadFrom(file).DefinedTypes
+                       where type.ImplementedInterfaces.Contains(typeof(IPlugin))
+                       let ctor = type.GetConstructor(ConstructorFlags, null, new[] { typeof(PluginContext) }, null)
+                       let plugin = (IPlugin)ctor.Invoke(new[] { context })
+                       where !exclude.Contains(plugin.Name)
+                       select EnforceConventions(plugin)).ToArray();
         }
 
-        static void EnforceConventions(IPlugin plugin)
+        static IPlugin EnforceConventions(IPlugin plugin)
         {
             var name = plugin.Name;
 
@@ -66,45 +70,46 @@ namespace Alkahest.Core.Plugins
 
             if (Path.GetFileName(asm.Location.ToLowerInvariant()) != fileName)
                 throw new PluginException($"{name}: Plugin file name must be '{fileName}'.");
+
+            return plugin;
         }
 
-        static void CheckProxies(GameProxy[] proxies)
+        public void Start()
         {
-            if (proxies == null)
-                throw new ArgumentNullException(nameof(proxies));
+            if (_started)
+                throw new InvalidOperationException("Plugins have already been started.");
 
-            if (proxies.Any(x => x == null))
-                throw new ArgumentException("A null proxy was given.", nameof(proxies));
-        }
+            _started = true;
 
-        public void Start(GameProxy[] proxies)
-        {
-            CheckProxies(proxies);
+            Context.Dispatch.Start();
 
-            Context.Data.Freeze();
-
-            foreach (var p in _plugins)
+            foreach (var p in Plugins)
             {
-                p.Start(Context, proxies.ToArray());
+                p.Start();
 
                 _log.Info("Started plugin {0}", p.Name);
             }
 
-            _log.Basic("Started {0} plugins", _plugins.Length);
+            _log.Basic("Started {0} plugins", Plugins.Count);
         }
 
-        public void Stop(GameProxy[] proxies)
+        public void Stop()
         {
-            CheckProxies(proxies);
+            if (!_started)
+                throw new InvalidOperationException("Plugins have not been started.");
 
-            foreach (var p in _plugins)
+            _started = false;
+
+            Context.Dispatch.Stop();
+
+            foreach (var p in Plugins)
             {
-                p.Stop(Context, proxies.ToArray());
+                p.Stop();
 
                 _log.Info("Stopped plugin {0}", p.Name);
             }
 
-            Context.Data.Thaw();
+            _log.Basic("Stopped {0} plugins", Plugins.Count);
         }
     }
 }

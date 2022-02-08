@@ -8,9 +8,9 @@ namespace Alkahest.Core.Data
     {
         public uint ElementSize { get; }
 
-        public IReadOnlyList<DataCenterSegment> Segments { get; }
+        public IReadOnlyList<DataCenterRegion> Segments { get; }
 
-        public DataCenterSegmentedRegion(uint elementSize, IReadOnlyList<DataCenterSegment> segments)
+        public DataCenterSegmentedRegion(uint elementSize, IReadOnlyList<DataCenterRegion> segments)
         {
             ElementSize = elementSize;
             Segments = segments;
@@ -19,7 +19,8 @@ namespace Alkahest.Core.Data
         public GameBinaryReader GetReader(DataCenterAddress address)
         {
             if (address.SegmentIndex >= Segments.Count)
-                throw new InvalidDataException();
+                throw new InvalidDataException(
+                    $"Segment index {address.SegmentIndex} is greater than {Segments.Count}.");
 
             return Segments[address.SegmentIndex].GetReader(address.ElementIndex);
         }

@@ -3,14 +3,18 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Threading;
 
 namespace Alkahest.Core.Data
 {
-    public sealed class DataCenter : IDisposable
+    public sealed class DataCenter
     {
-        public const int KeySize = 16;
+        public static int KeySize => 16;
+
+        public static uint Version => 6;
+
+        public static string PackedExtension => "dat";
+
+        public static string UnpackedExtension => "dec";
 
         public static IReadOnlyDictionary<Region, string> FileNames { get; } =
             new Dictionary<Region, string>
@@ -27,160 +31,121 @@ namespace Alkahest.Core.Data
                 { Region.UK, "DataCenter_Final_EUR.dat" },
             };
 
-        public static IReadOnlyDictionary<Region, uint> Versions { get; } =
+        public static IReadOnlyDictionary<Region, uint> ClientVersions { get; } =
             new Dictionary<Region, uint>
             {
-                { Region.DE, 350022 },
-                { Region.FR, 350022 },
-                { Region.JP, 350023 },
+                { Region.DE, 353338 },
+                { Region.FR, 353338 },
+                { Region.JP, 353341 },
                 { Region.KR, 0 },
-                { Region.NA, 347372 },
-                { Region.RU, 350024 },
-                { Region.SE, 349932 },
-                { Region.TH, 349932 },
-                { Region.TW, 350025 },
-                { Region.UK, 350022 },
+                { Region.NA, 353337 },
+                { Region.RU, 353342 },
+                { Region.SE, 353339 },
+                { Region.TH, 353339 },
+                { Region.TW, 353340 },
+                { Region.UK, 353338 },
             };
 
-        const int Unknown1Size = 8;
+        const int ExtensionSize = 8;
 
-        const int AttributeSize = 8;
+        const int AttributeSize = 12;
 
-        const int ElementSize = 16;
+        const int ElementSize = 24;
 
-        const int Unknown2Size = 16;
+        const int MetadataSize = 16;
+
+        public DataCenterMode Mode { get; }
 
         public DataCenterHeader Header { get; }
 
-        public DataCenterFooter Footer { get; }
-
-        public DataCenterElement Root { get; private set; }
+        internal DataCenterSimpleRegion Extensions { get; private set; }
 
         internal DataCenterSegmentedRegion Attributes { get; private set; }
 
         internal DataCenterSegmentedRegion Elements { get; private set; }
 
-        internal IReadOnlyList<string> Names { get; private set; }
+        internal DataCenterStringTable Values { get; private set; }
 
-        internal bool IsFrozen { get; private set; }
+        internal DataCenterStringTable Names { get; private set; }
 
-        internal bool IsDisposed { get; private set; }
+        public DataCenterFooter Footer { get; }
 
-        internal ReaderWriterLockSlim Lock { get; } = new ReaderWriterLockSlim();
+        public DataCenterElement Root => Materialize(DataCenterAddress.Zero);
 
-        ConcurrentDictionary<DataCenterAddress, string> _strings =
-            new ConcurrentDictionary<DataCenterAddress, string>();
+        readonly ConcurrentDictionary<DataCenterAddress, DataCenterElement> _elements =
+            new ConcurrentDictionary<DataCenterAddress, DataCenterElement>();
 
-        readonly bool _intern;
-
-        DataCenterSegmentedRegion _stringRegion;
+        readonly ConcurrentDictionary<DataCenterAddress, WeakReference<DataCenterElement>> _weakElements =
+            new ConcurrentDictionary<DataCenterAddress, WeakReference<DataCenterElement>>();
 
         public DataCenter(uint version)
         {
-            Header = new DataCenterHeader(0, 0, 0, version, 0, 0, 0, 0);
+            Mode = DataCenterMode.Persistent;
+            Header = new DataCenterHeader(Version, 0, 0, -16400, version, 0, 0, 0, 0);
             Footer = new DataCenterFooter(0);
-            Root = new DataCenterElement(this, DataCenterAddress.Zero);
         }
 
-        public unsafe DataCenter(string fileName, bool intern)
+        public DataCenter(Stream stream, DataCenterMode mode, DataCenterStringOptions options)
         {
-            _intern = intern;
+            options.CheckFlagsValidity(nameof(options));
 
-            using var reader = new GameBinaryReader(File.OpenRead(fileName));
+            Mode = mode.CheckValidity(nameof(mode));
+
+            using var reader = new GameBinaryReader(stream, true);
 
             Header = ReadHeader(reader);
-
-            ReadSimpleRegion(reader, false, Unknown1Size);
-
-            var attributeRegion = ReadSegmentedRegion(reader, AttributeSize);
-            var elementRegion = ReadSegmentedRegion(reader, ElementSize);
-
-            _stringRegion = ReadSegmentedRegion(reader, sizeof(char));
-
-            ReadSimpleSegmentedRegion(reader, 1024, Unknown2Size);
-            ReadSimpleRegion(reader, true, (uint)sizeof(DataCenterAddress));
-
-            var nameRegion = ReadSegmentedRegion(reader, sizeof(char));
-
-            ReadSimpleSegmentedRegion(reader, 512, Unknown2Size);
-
-            var nameAddressRegion = ReadSimpleRegion(reader, true, (uint)sizeof(DataCenterAddress));
-
+            Extensions = ReadSimpleRegion(reader, false, ExtensionSize);
+            Attributes = ReadSegmentedRegion(reader, AttributeSize);
+            Elements = ReadSegmentedRegion(reader, ElementSize);
+            Values = ReadStringTable(reader, 1024, false, options);
+            Names = ReadStringTable(reader, 512, true, options);
             Footer = ReadFooter(reader);
-            Attributes = attributeRegion;
-            Elements = elementRegion;
-            Names = ReadAddresses(nameAddressRegion).Select(x => ReadString(nameRegion, x)).ToArray();
 
-            Reset();
+            var diff = stream.Length - stream.Position;
+
+            if (diff != 0)
+                throw new InvalidDataException($"{diff} bytes remain unread.");
         }
 
-        public void Dispose()
+        internal DataCenterElement Materialize(DataCenterAddress address)
         {
-            if (IsFrozen)
-                throw new InvalidOperationException("Data center is frozen.");
-
-            try
+            DataCenterElement Create(DataCenterAddress address)
             {
-                Lock.EnterWriteLock();
-
-                IsDisposed = true;
-
-                Root = null;
-                Attributes = null;
-                Elements = null;
-                Names = null;
-                _strings = null;
-                _stringRegion = null;
+                return new DataCenterElement(this, address);
             }
-            finally
+
+            switch (Mode)
             {
-                Lock.ExitWriteLock();
+                case DataCenterMode.Persistent:
+                    return _elements.GetOrAdd(address, Create);
+                case DataCenterMode.Transient:
+                    return Create(address);
+                case DataCenterMode.Weak:
+                    var weak = _weakElements.GetOrAdd(address,
+                        a => new WeakReference<DataCenterElement>(Create(a)));
+
+                    if (!weak.TryGetTarget(out var elem))
+                        weak.SetTarget(elem = Create(address));
+
+                    return elem;
+                default:
+                    throw Assert.Unreachable();
             }
-        }
-
-        internal void Freeze()
-        {
-            IsFrozen = true;
-        }
-
-        internal void Thaw()
-        {
-            IsFrozen = false;
-        }
-
-        public void Reset()
-        {
-            if (IsDisposed)
-                throw new ObjectDisposedException(GetType().FullName);
-
-            if (IsFrozen)
-                throw new InvalidOperationException("Data center is frozen.");
-
-            Root = new DataCenterElement(this, DataCenterAddress.Zero);
-        }
-
-        internal string GetString(DataCenterAddress address)
-        {
-            return _strings.GetOrAdd(address, a =>
-            {
-                var str = _stringRegion.GetReader(address).ReadString();
-
-                return _intern ? string.Intern(str) : str;
-            });
         }
 
         static DataCenterHeader ReadHeader(GameBinaryReader reader)
         {
-            var unk1 = reader.ReadInt32();
-            var unk2 = reader.ReadInt32();
-            var unk3 = reader.ReadInt32();
             var version = reader.ReadUInt32();
+            var unk1 = reader.ReadInt32();
+            var unk2 = reader.ReadInt16();
+            var unk3 = reader.ReadInt16();
+            var clientVersion = reader.ReadUInt32();
             var unk4 = reader.ReadInt32();
             var unk5 = reader.ReadInt32();
             var unk6 = reader.ReadInt32();
             var unk7 = reader.ReadInt32();
 
-            return new DataCenterHeader(unk1, unk2, unk3, version, unk4, unk5, unk6, unk7);
+            return new DataCenterHeader(version, unk1, unk2, unk3, clientVersion, unk4, unk5, unk6, unk7);
         }
 
         static DataCenterFooter ReadFooter(GameBinaryReader reader)
@@ -203,35 +168,45 @@ namespace Alkahest.Core.Data
             return new DataCenterSimpleRegion(elementSize, count, data);
         }
 
-        static DataCenterSimpleSegmentedRegion ReadSimpleSegmentedRegion(GameBinaryReader reader,
+        static DataCenterSegmentedSimpleRegion ReadSegmentedSimpleRegion(GameBinaryReader reader,
             uint count, uint elementSize)
         {
-            var segments = new List<DataCenterSimpleRegion>();
+            var segments = new List<DataCenterSimpleRegion>((int)count);
 
             for (var i = 0; i < count; i++)
                 segments.Add(ReadSimpleRegion(reader, false, elementSize));
 
-            return new DataCenterSimpleSegmentedRegion(elementSize, segments);
+            return new DataCenterSegmentedSimpleRegion(elementSize, segments);
         }
 
-        static DataCenterSegment ReadSegment(GameBinaryReader reader, uint elementSize)
+        static DataCenterRegion ReadRegion(GameBinaryReader reader, uint elementSize)
         {
             var full = reader.ReadUInt32();
             var used = reader.ReadUInt32();
             var data = reader.ReadBytes((int)(full * elementSize));
 
-            return new DataCenterSegment(elementSize, full, used, data);
+            return new DataCenterRegion(elementSize, full, used, data);
         }
 
         static DataCenterSegmentedRegion ReadSegmentedRegion(GameBinaryReader reader, uint elementSize)
         {
             var count = reader.ReadUInt32();
-            var segments = new List<DataCenterSegment>((int)count);
+            var segments = new List<DataCenterRegion>((int)count);
 
             for (var i = 0; i < count; i++)
-                segments.Add(ReadSegment(reader, elementSize));
+                segments.Add(ReadRegion(reader, elementSize));
 
             return new DataCenterSegmentedRegion(elementSize, segments);
+        }
+
+        static unsafe DataCenterStringTable ReadStringTable(GameBinaryReader reader, uint count,
+            bool names, DataCenterStringOptions options)
+        {
+            var data = ReadSegmentedRegion(reader, sizeof(char));
+            var table = ReadSegmentedSimpleRegion(reader, count, MetadataSize);
+            var addresses = ReadSimpleRegion(reader, true, (uint)sizeof(DataCenterAddress));
+
+            return new DataCenterStringTable(data, table, addresses, names, options);
         }
 
         internal static DataCenterAddress ReadAddress(GameBinaryReader reader)
@@ -240,19 +215,6 @@ namespace Alkahest.Core.Data
             var element = reader.ReadUInt16();
 
             return new DataCenterAddress(segment, element);
-        }
-
-        static IEnumerable<DataCenterAddress> ReadAddresses(DataCenterSimpleRegion region)
-        {
-            var reader = region.GetReader(0);
-
-            for (var i = 0; i < region.Count; i++)
-                yield return ReadAddress(reader);
-        }
-
-        static string ReadString(DataCenterSegmentedRegion region, DataCenterAddress address)
-        {
-            return region.GetReader(address).ReadString();
         }
     }
 }

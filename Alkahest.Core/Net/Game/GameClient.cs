@@ -1,4 +1,5 @@
 using Alkahest.Core.Cryptography;
+using Alkahest.Core.IO;
 using Alkahest.Core.Logging;
 using Alkahest.Core.Net.Game.Serialization;
 using System;
@@ -23,13 +24,19 @@ namespace Alkahest.Core.Net.Game
 
         GameEncryptionSession _clientEncryption;
 
-        readonly byte[] _clientSendBuffer = new byte[PacketHeader.MaxPacketSize];
+        readonly Memory<byte> _clientSendBuffer = new byte[PacketHeader.MaxPacketSize];
+
+        readonly GameBinaryWriter _clientSendWriter;
 
         readonly Socket _serverSocket;
 
         GameEncryptionSession _serverEncryption;
 
-        readonly byte[] _serverSendBuffer = new byte[PacketHeader.MaxPacketSize];
+        readonly Memory<byte> _serverSendBuffer = new byte[PacketHeader.MaxPacketSize];
+
+        readonly GameBinaryWriter _serverSendWriter;
+
+        readonly object _encryptionLock = new object();
 
         volatile bool _disconnected;
 
@@ -41,7 +48,17 @@ namespace Alkahest.Core.Net.Game
             _serverSocket = new Socket(proxy.Info.RealEndPoint.AddressFamily,
                 SocketType.Stream, ProtocolType.Tcp);
 
-            SetOptions();
+            void SetOptions(Socket socket)
+            {
+                socket.NoDelay = true;
+                socket.ReceiveTimeout = socket.SendTimeout = (int)proxy.Timeout.TotalMilliseconds;
+            }
+
+            SetOptions(_clientSocket);
+            SetOptions(_serverSocket);
+
+            _clientSendWriter = new GameBinaryWriter(_clientSendBuffer.GetArray());
+            _serverSendWriter = new GameBinaryWriter(_serverSendBuffer.GetArray());
 
             var args = proxy.ArgsPool.Get();
 
@@ -51,18 +68,6 @@ namespace Alkahest.Core.Net.Game
             proxy.AddClient(this);
 
             Connect(args);
-        }
-
-        void SetOptions()
-        {
-            var timeout = (int)Proxy.Timeout.TotalMilliseconds;
-
-            foreach (var socket in new[] { _clientSocket, _serverSocket })
-            {
-                socket.NoDelay = true;
-                socket.ReceiveTimeout = timeout;
-                socket.SendTimeout = timeout;
-            }
         }
 
         public void Disconnect()
@@ -81,38 +86,102 @@ namespace Alkahest.Core.Net.Game
 
             _serverSocket.SafeClose();
             _clientSocket.SafeClose();
+
+            lock (_encryptionLock)
+            {
+                _clientEncryption.Dispose();
+                _clientEncryption = null;
+
+                _serverEncryption.Dispose();
+                _serverEncryption = null;
+            }
+
+            Proxy.InvokeDisconnected(this);
+        }
+
+        static PacketHeader ReadHeader(GameBinaryReader reader)
+        {
+            reader.Position = 0;
+
+            var length = (ushort)(reader.ReadUInt16() - PacketHeader.HeaderSize);
+            var code = reader.ReadUInt16();
+
+            return new PacketHeader(length, code);
+        }
+
+        static void WriteHeader(GameBinaryWriter writer, PacketHeader header)
+        {
+            writer.Position = 0;
+
+            writer.WriteUInt16((ushort)(header.Length + PacketHeader.HeaderSize));
+            writer.WriteUInt16(header.Code);
         }
 
         public bool SendToClient(RawPacket packet)
         {
-            return SendRawPacketInternal(packet, _clientSendBuffer, _clientSocket, _clientEncryption, false);
+            return SendToClient(packet, false);
+        }
+
+        internal bool SendToClient(RawPacket packet, bool direct)
+        {
+            return SendRawPacketInternal(Direction.ServerToClient, packet, _clientSendBuffer,
+                _clientSendWriter, _clientSocket, _clientEncryption, false, direct);
         }
 
         public bool SendToServer(RawPacket packet)
         {
-            return SendRawPacketInternal(packet, _serverSendBuffer, _serverSocket, _serverEncryption, true);
+            return SendToServer(packet, false);
         }
 
-        bool SendRawPacketInternal(RawPacket packet, byte[] buffer, Socket socket,
-            GameEncryptionSession encryption, bool server)
+        internal bool SendToServer(RawPacket packet, bool direct)
+        {
+            return SendRawPacketInternal(Direction.ClientToServer, packet, _serverSendBuffer,
+                _serverSendWriter, _serverSocket, _serverEncryption, true, direct);
+        }
+
+        bool SendRawPacketInternal(Direction direction, RawPacket packet, Memory<byte> buffer,
+            GameBinaryWriter writer, Socket socket, GameEncryptionSession encryption, bool server,
+            bool direct)
         {
             if (packet == null)
                 throw new ArgumentNullException(nameof(packet));
 
-            if (packet.Payload.Length > PacketHeader.MaxPayloadSize)
-                throw new ArgumentException("Packet is too big.", nameof(packet));
+            if (packet.Name == null)
+                throw new ArgumentException("Packet has no name.", nameof(packet));
 
-            var header = new PacketHeader((ushort)packet.Payload.Length,
-                Proxy.Processor.Serializer.GameMessages.NameToCode[packet.Name]);
+            if (packet.Payload.Length > PacketHeader.MaxPayloadSize)
+                throw new ArgumentException("Packet is too large.", nameof(packet));
+
+            if (!Proxy.Serializer.GameMessages.NameToCode.TryGetValue(packet.Name, out var code))
+                throw new UnmappedMessageException();
+
+            var payload = packet.Payload;
+            var original = payload;
+            var send = Proxy.InvokeSent(this, direction, code, ref payload, direct);
+
+            if (!send)
+                return false;
+
+            // A handler might have created a packet that's too large.
+            if (payload.Length > PacketHeader.MaxPayloadSize)
+            {
+                _log.Error(
+                    "{0}: Forged packet {1} is too large ({2} bytes) to be sent correctly after running handlers; sending original",
+                    direction.ToDirectionString(), packet.Name, payload.Length);
+
+                payload = original;
+            }
 
             lock (socket)
             {
-                PacketProcessor.WriteHeader(header, buffer);
-                Buffer.BlockCopy(packet.Payload, 0, buffer, PacketHeader.HeaderSize, header.Length);
+                var header = new PacketHeader((ushort)payload.Length, code);
+
+                WriteHeader(writer, header);
+                payload.CopyTo(buffer.Slice(PacketHeader.HeaderSize, header.Length));
 
                 try
                 {
-                    return SendInternal(buffer, header.FullLength, false, socket, encryption, server);
+                    return SendInternal(buffer.Slice(0, header.FullLength), false, socket, encryption, server);
                 }
                 catch (SocketDisconnectedException)
                 {
@@ -124,36 +193,65 @@ namespace Alkahest.Core.Net.Game
 
         public bool SendToClient(SerializablePacket packet)
         {
-            return SendPacketInternal(packet, _clientSendBuffer, _clientSocket, _clientEncryption, false);
+            return SendToClient(packet, false);
+        }
+
+        internal bool SendToClient(SerializablePacket packet, bool direct)
+        {
+            return SendPacketInternal(Direction.ServerToClient, packet, _clientSendBuffer,
+                _clientSendWriter, _clientSocket, _clientEncryption, false, direct);
         }
 
         public bool SendToServer(SerializablePacket packet)
         {
-            return SendPacketInternal(packet, _serverSendBuffer, _serverSocket, _serverEncryption, true);
+            return SendToServer(packet, false);
         }
 
-        bool SendPacketInternal(SerializablePacket packet, byte[] buffer, Socket socket,
-            GameEncryptionSession encryption, bool server)
+        internal bool SendToServer(SerializablePacket packet, bool direct)
+        {
+            return SendPacketInternal(Direction.ClientToServer, packet, _serverSendBuffer,
+                _serverSendWriter, _serverSocket, _serverEncryption, true, direct);
+        }
+
+        bool SendPacketInternal(Direction direction, SerializablePacket packet, Memory<byte> buffer,
+            GameBinaryWriter writer, Socket socket, GameEncryptionSession encryption, bool server,
+            bool direct)
         {
             if (packet == null)
                 throw new ArgumentNullException(nameof(packet));
 
-            var data = Proxy.Processor.Serializer.Serialize(packet);
+            var payload = Proxy.Serializer.Serialize(packet).AsMemory();
 
-            if (data.Length > PacketHeader.MaxPayloadSize)
-                throw new ArgumentException("Packet is too big.", nameof(packet));
+            if (payload.Length > PacketHeader.MaxPayloadSize)
+                throw new ArgumentException("Packet is too large.", nameof(packet));
 
-            var header = new PacketHeader((ushort)data.Length,
-                Proxy.Processor.Serializer.GameMessages.NameToCode[packet.Name]);
+            var code = Proxy.Serializer.GameMessages.NameToCode[packet.Name];
+            var original = payload;
+            var send = Proxy.InvokeSent(this, direction, code, ref payload, direct);
+
+            if (!send)
+                return false;
+
+            // A handler might have created a packet that's too large.
+            if (payload.Length > PacketHeader.MaxPayloadSize)
+            {
+                _log.Error(
+                    "{0}: Forged packet {1} is too large ({2} bytes) to be sent correctly after running handlers; sending original",
+                    direction.ToDirectionString(), packet.Name, payload.Length);
+
+                payload = original;
+            }
 
             lock (socket)
             {
-                PacketProcessor.WriteHeader(header, buffer);
-                Buffer.BlockCopy(data, 0, buffer, PacketHeader.HeaderSize, header.Length);
+                var header = new PacketHeader((ushort)payload.Length, code);
+
+                WriteHeader(writer, header);
+                payload.CopyTo(buffer.Slice(PacketHeader.HeaderSize, header.Length));
 
                 try
                 {
-                    return SendInternal(buffer, header.FullLength, false, socket, encryption, server);
+                    return SendInternal(buffer.Slice(0, header.FullLength), false, socket, encryption, server);
                 }
                 catch (SocketDisconnectedException)
                 {
@@ -163,27 +261,27 @@ namespace Alkahest.Core.Net.Game
             }
         }
 
-        bool SendToClientInternal(byte[] data, bool rethrow)
+        bool SendToClientInternal(Memory<byte> data, bool rethrow)
         {
-            return SendInternal(data, data.Length, rethrow, _clientSocket, _clientEncryption, false);
+            return SendInternal(data, rethrow, _clientSocket, _clientEncryption, false);
         }
 
-        bool SendToServerInternal(byte[] data, bool rethrow)
+        bool SendToServerInternal(Memory<byte> data, bool rethrow)
         {
-            return SendInternal(data, data.Length, rethrow, _serverSocket, _serverEncryption, true);
+            return SendInternal(data, rethrow, _serverSocket, _serverEncryption, true);
         }
 
-        bool SendInternal(byte[] data, int length, bool rethrow, Socket socket,
+        bool SendInternal(Memory<byte> data, bool rethrow, Socket socket,
             GameEncryptionSession encryption, bool server)
         {
             return RunGuarded(rethrow, server, () =>
             {
-                if (encryption != null)
-                    lock (encryption)
-                        encryption.Encrypt(data, 0, length);
+                lock (_encryptionLock)
+                    if (encryption != null)
+                        encryption.Encrypt(data);
 
                 lock (socket)
-                    socket.SendFull(data, 0, length);
+                    socket.SendFull(data.GetArray());
             });
         }
 
@@ -191,7 +289,7 @@ namespace Alkahest.Core.Net.Game
         {
             var data = new byte[length];
 
-            ReceiveInternal(data, data.Length, _clientSocket, _clientEncryption, false);
+            ReceiveInternal(data, _clientSocket, _clientEncryption, false);
 
             return data;
         }
@@ -200,21 +298,21 @@ namespace Alkahest.Core.Net.Game
         {
             var data = new byte[length];
 
-            ReceiveInternal(data, data.Length, _serverSocket, _serverEncryption, true);
+            ReceiveInternal(data, _serverSocket, _serverEncryption, true);
 
             return data;
         }
 
-        void ReceiveInternal(byte[] data, int length, Socket socket, GameEncryptionSession encryption,
+        void ReceiveInternal(Memory<byte> data, Socket socket, GameEncryptionSession encryption,
             bool server)
         {
             RunGuarded(true, server, () =>
             {
-                socket.ReceiveFull(data, 0, length);
+                socket.ReceiveFull(data.GetArray());
 
-                if (encryption != null)
-                    lock (encryption)
-                        encryption.Decrypt(data, 0, length);
+                lock (_encryptionLock)
+                    if (encryption != null)
+                        encryption.Decrypt(data);
             });
         }
 
@@ -295,14 +393,26 @@ namespace Alkahest.Core.Net.Game
 
             _log.Info("Established encrypted session for client {0}", EndPoint);
 
-            Receive(Direction.ClientToServer, null, null);
-            Receive(Direction.ServerToClient, null, null);
+            Receive(Direction.ClientToServer, null, null, null, null, false);
+            Receive(Direction.ServerToClient, null, null, null, null, false);
+
+            Proxy.InvokeConnected(this);
         }
 
-        void Receive(Direction direction, byte[] headerBuffer, byte[] payloadBuffer)
+        void Receive(Direction direction, Memory<byte> headerBuffer, GameBinaryReader headerReader,
+            GameBinaryWriter headerWriter, Memory<byte> payloadBuffer, bool nested)
         {
-            headerBuffer ??= new byte[PacketHeader.HeaderSize];
-            payloadBuffer ??= new byte[PacketHeader.MaxPayloadSize];
+            if (headerBuffer.IsEmpty)
+            {
+                var arr = new byte[PacketHeader.HeaderSize];
+
+                headerBuffer = arr;
+                headerReader = new GameBinaryReader(arr);
+                headerWriter = new GameBinaryWriter(arr);
+            }
+
+            if (payloadBuffer.IsEmpty)
+                payloadBuffer = new byte[PacketHeader.MaxPayloadSize];
 
             Socket from;
             Socket to;
@@ -331,9 +441,9 @@ namespace Alkahest.Core.Net.Game
             {
                 try
                 {
-                    ReceiveInternal(headerBuffer, PacketHeader.HeaderSize, from, fromEnc, fromServer);
+                    ReceiveInternal(headerBuffer, from, fromEnc, fromServer);
 
-                    var header = PacketProcessor.ReadHeader(headerBuffer);
+                    var header = ReadHeader(headerReader);
 
                     if (header.Length > PacketHeader.MaxPayloadSize)
                     {
@@ -343,17 +453,39 @@ namespace Alkahest.Core.Net.Game
                         return false;
                     }
 
-                    ReceiveInternal(payloadBuffer, header.Length, from, fromEnc, fromServer);
+                    var payload = payloadBuffer.Slice(0, header.Length);
 
-                    // Can be set to a new array.
-                    var payload = payloadBuffer;
+                    ReceiveInternal(payload, from, fromEnc, fromServer);
 
-                    if (Proxy.Processor.Process(this, direction, ref header, ref payload))
+                    var original = payload;
+                    var send = Proxy.InvokeReceived(this, direction, header.Code, ref payload);
+
+                    if (send)
                     {
-                        PacketProcessor.WriteHeader(header, headerBuffer);
+                        // A handler might have created a packet that's too large.
+                        if (payload.Length > PacketHeader.MaxPayloadSize)
+                        {
+                            Proxy.Serializer.GameMessages.CodeToName.TryGetValue(header.Code,
+                                out var name);
 
-                        SendInternal(headerBuffer, headerBuffer.Length, true, to, toEnc, toServer);
-                        SendInternal(payload, header.Length, true, to, toEnc, toServer);
+                            if (name == null)
+                                name = header.Code.ToString();
+
+                            _log.Error(
+                                "{0}: Packet {1} is too large ({2} bytes) to be sent correctly; sending original",
+                                direction.ToDirectionString(), name, payload.Length);
+
+                            payload = original;
+                        }
+
+                        header = new PacketHeader((ushort)payload.Length, header.Code);
+
+                        WriteHeader(headerWriter, header);
+
+                        var headerSlice = headerBuffer.Slice(0, PacketHeader.HeaderSize);
+
+                        SendInternal(headerSlice, true, to, toEnc, toServer);
+                        SendInternal(payload, true, to, toEnc, toServer);
                     }
                 }
                 catch (SocketDisconnectedException)
@@ -373,19 +505,26 @@ namespace Alkahest.Core.Net.Game
 
             // If we don't expect a large number of clients, just use dedicated
             // tasks to receive data instead of spawning a new one per receive.
-            if (Proxy.MaxClients <= Environment.ProcessorCount)
+            if (!nested && Proxy.MaxClients <= Environment.ProcessorCount)
                 Task.Factory.StartNew(() =>
                 {
                     while (DoReceive())
                     {
                     }
+
+                    headerReader.Dispose();
+                    headerWriter.Dispose();
                 }, TaskCreationOptions.LongRunning);
             else
                 Task.Run(() =>
                 {
-                    DoReceive();
-
-                    Receive(direction, headerBuffer, payloadBuffer);
+                    if (!DoReceive())
+                    {
+                        headerReader.Dispose();
+                        headerWriter.Dispose();
+                    }
+                    else
+                        Receive(direction, headerBuffer, headerReader, headerWriter, payloadBuffer, true);
                 });
         }
 

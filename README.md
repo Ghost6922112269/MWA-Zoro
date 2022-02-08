@@ -1,8 +1,8 @@
-# ![Alkahest](Alkahest.ico) Alkahest
+# <img src="https://raw.githubusercontent.com/tera-alkahest/alkahest/master/Alkahest.ico" width="32"> Alkahest
 
 [![Latest Release](https://img.shields.io/github/release/tera-alkahest/alkahest/all.svg)](https://github.com/tera-alkahest/alkahest/releases)
 [![NuGet Package](https://img.shields.io/nuget/v/Alkahest.Core.svg)](https://www.nuget.org/packages/Alkahest.Core)
-[![Build Status](https://ci.appveyor.com/api/projects/status/github/tera-alkahest/alkahest?svg=true)](https://ci.appveyor.com/project/tera-alkahest/alkahest)
+[![Build Status](https://ci.appveyor.com/api/projects/status/github/tera-alkahest/alkahest?svg=true)](https://ci.appveyor.com/project/alexrp/alkahest-ue82n)
 [![Discord Server](https://discordapp.com/api/guilds/576893607701905439/widget.png)](https://discord.io/alkahest)
 
 **Alkahest** is a proxy server for
@@ -25,9 +25,7 @@ accessing data stored with the game client.
 
 * **.NET plugins:** Plugins can be written in any .NET language, including C#,
   F#, Nemerle, etc.
-* **Python and C# scripting:** Default plugins enable scripting with either
-  Python (using IronPython) or C# (using Roslyn) as an alternative to compiled
-  plugins.
+* **C# scripting:** A default plugin enables scripting with C#, via Roslyn.
 * **Packet manipulation:** Packets can easily be intercepted, modified, or even
   constructed from scratch, in either raw or typed form.
 * **Fast packet serialization**: Specialized serialization functions are
@@ -51,7 +49,7 @@ accessing data stored with the game client.
 
 ## Installation
 
-[Archives with compiled binaries are available from the releases page.](https://github.com/alexrp/alkahest/releases)
+[Archives with compiled binaries are available from the releases page.](https://github.com/tera-alkahest/alkahest/releases)
 
 Alkahest requires .NET Framework 4.7.2 to run.
 
@@ -72,10 +70,11 @@ configuration. All build artifacts will end up in the `Build` directory.
 If you want to build the NuGet package, run this command after building:
 
 ```bash
-nuget pack -Symbols Alkahest.Core
+msbuild /t:Pack Alkahest.Core
 ```
 
-This will create a file named something like `Alkahest.Core.1.0.0.nupkg`.
+This will create a file named something like `Alkahest.Core.1.0.0.nupkg` in the
+`Build` directory.
 
 ## Configuration
 
@@ -93,7 +92,8 @@ The most important configuration values you will need to change are:
   `file` logger from this list to save disk space.
 * `disablePlugins`: Most users can add `packet-logger` to this list to save disk
   space, as they likely will not need packet logs.
-* `region`: Set this to `de`, `fr`, `jp`, `na`, `ru`, `se`, `th`, `tw`, or `uk`.
+* `regions`: Set this to any of `de`, `fr`, `jp`, `na`, `ru`, `se`, `th`, `tw`,
+  and `uk`, depending on which region(s) you intend to play in.
 
 There are many other configuration values that you can play with, but you do not
 need to change them if all you want is to use Alkahest for a single TERA client
@@ -122,6 +122,9 @@ so you must run Alkahest as administrator.
 If Alkahest terminates abnormally, you can run `Alkahest.exe serve -c` on the
 command line to clean up the aforementioned system changes.
 
+When a new version of Alkahest is released, you can run `Alkahest.exe upgrade`
+to upgrade en existing installation.
+
 ## Extensibility
 
 Alkahest can be exteneded with
@@ -147,10 +150,10 @@ Script packages can be managed with Alkahest's package management commands:
 * `uninstall`: Uninstall given package(s).
 * `update`: Update given package(s) or all packages.
 
-For example, `Alkahest.exe install csharp_example` installs the `csharp_example`
-package, `Alkahest.exe update` updates all installed packages,
-`Alkahest.exe search foo` finds all packages containing the string `foo` in
-either name or description, etc.
+For example, `Alkahest.exe install example` installs the `example` package,
+`Alkahest.exe update` updates all installed packages, `Alkahest.exe search foo`
+finds all packages containing the string `foo` in either name or description,
+etc.
 
 ## Disclaimer
 
@@ -181,13 +184,12 @@ Please see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 Please see [LICENSE.md](LICENSE.md).
 
-## Donations
+## Funding
 
-[![Liberapay Receiving](http://img.shields.io/liberapay/receives/alkahest.svg?logo=liberapay)](https://liberapay.com/alkahest/donate)
-[![Liberapay Patrons](http://img.shields.io/liberapay/patrons/alkahest.svg?logo=liberapay)](https://liberapay.com/alkahest)
-
-If you like this project and would like to support the core developers, you
-might consider donating. Please only donate if you want to and have the means to
-do so; we want to be very clear that the project will always be available for
-free under a permissive license, and you should not feel obligated to donate or
-pay for it in any way.
+I work on open source software projects such as this one in my spare time, and
+make them available free of charge under permissive licenses. If you like my
+work and would like to support me, you might consider [sponsoring
+me](https://github.com/sponsors/alexrp). Please only donate if you want to and
+have the means to do so; I want to be very clear that all open source software I
+write will always be available for free and you should not feel obligated to
+donate or pay for it in any way.

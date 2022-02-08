@@ -1,9 +1,62 @@
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Alkahest.Core
 {
     public static class Extensions
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Memory<T> AsMemory<T>(this ReadOnlyMemory<T> memory)
+        {
+            return MemoryMarshal.AsMemory(memory);
+        }
+
+        public static ArraySegment<T> GetArray<T>(this ReadOnlyMemory<T> memory)
+        {
+            if (MemoryMarshal.TryGetArray(memory, out var seg))
+                return seg;
+
+            throw new InvalidOperationException("Memory does not have a backing array.");
+        }
+
+        public static ArraySegment<T> GetArray<T>(this Memory<T> memory)
+        {
+            return ((ReadOnlyMemory<T>)memory).GetArray();
+        }
+
+        public static IEnumerable<T> ToEnumerable<T>(this ReadOnlyMemory<T> memory)
+        {
+            return MemoryMarshal.ToEnumerable(memory);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ReadOnlySpan<byte> AsBytes<T>(this ReadOnlySpan<T> span)
+            where T : struct
+        {
+            return MemoryMarshal.AsBytes(span);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Span<byte> AsBytes<T>(this Span<T> span)
+            where T : struct
+        {
+            return MemoryMarshal.AsBytes(span);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ref T GetReference<T>(this ReadOnlySpan<T> span)
+        {
+            return ref MemoryMarshal.GetReference(span);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ref T GetReference<T>(this Span<T> span)
+        {
+            return ref MemoryMarshal.GetReference(span);
+        }
+
         internal static T CheckValidity<T>(this T value, string name)
             where T : Enum
         {
@@ -15,16 +68,16 @@ namespace Alkahest.Core
             return value;
         }
 
-        public static T[] Slice<T>(this T[] array, int start, int length)
+        internal static T CheckFlagsValidity<T>(this T value, string name)
+            where T : Enum
         {
-            if (length < 0)
-                throw new ArgumentOutOfRangeException(nameof(length));
+            var t = typeof(T);
+            var ch = value.ToString()[0];
 
-            var arr = new T[length];
+            if (ch == '-' || char.IsDigit(ch))
+                throw new ArgumentException($"Invalid {t.Name} flag combination.", name);
 
-            Array.Copy(array, start, arr, 0, length);
-
-            return arr;
+            return value;
         }
 
         public static string ToDirectionString(this Direction direction)

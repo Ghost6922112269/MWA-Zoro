@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -18,18 +18,93 @@
   </Target>
   <Target Name="Build">
     <ItemGroup>
-      <ReleaseFiles Include="..\*.md; ..\*.ico; ..\*.crt; ..\*.pfx" />
-      <ReleaseFiles Include="..\Build\*.exe*; ..\Build\*.dll; ..\Build\*.pdb" />
-      <ReleaseFiles Include="..\Build\Plugins\alkahest-*; ..\Build\Plugins\IronPython.*; ..\Build\Plugins\Microsoft.*; ..\Build\Plugins\System.*" Exclude="..\Build\Plugins\System.Net.Http.Formatting.dll; ..\Build\Plugins\System.Runtime.CompilerServices.Unsafe.dll; ..\Build\Plugins\System.Web.Http.dll; ..\Build\Plugins\System.Web.Http.SelfHost.dll" />
-      <ReleaseFiles Include="..\Build\PythonLibs\**" />
+      <ReleaseFiles Include="..\ACKNOWLEDGEMENTS.md" />
+      <ReleaseFiles Include="..\LICENSE.md" />
+      <ReleaseFiles Include="..\README.md" />
+      <ReleaseFiles Include="..\Alkahest.ico" />
+      <ReleaseFiles Include="..\AlkahestCA.crt" />
+      <ReleaseFiles Include="..\Alkahest.pfx" />
+      <ReleaseFiles Include="..\Build\Alkahest.Core.dll" />
+      <ReleaseFiles Include="..\Build\Alkahest.Upgrader.exe" />
+      <ReleaseFiles Include="..\Build\Alkahest.exe" />
+      <ReleaseFiles Include="..\Build\Alkahest.exe.config" />
+      <ReleaseFiles Include="..\Build\EasyHook.dll" />
+      <ReleaseFiles Include="..\Build\EasyHook32.dll" />
+      <ReleaseFiles Include="..\Build\EasyHook32Svc.exe" />
+      <ReleaseFiles Include="..\Build\EasyLoad32.dll" />
+      <ReleaseFiles Include="..\Build\Mono.Linq.Expressions.dll" />
+      <ReleaseFiles Include="..\Build\Mono.Options.dll" />
+      <ReleaseFiles Include="..\Build\Newtonsoft.Json.dll" />
+      <ReleaseFiles Include="..\Build\Octokit.dll" />
+      <ReleaseFiles Include="..\Build\SharpDisasm.dll" />
+      <ReleaseFiles Include="..\Build\System.Buffers.dll" />
+      <ReleaseFiles Include="..\Build\System.ComponentModel.Annotations.dll" />
+      <ReleaseFiles Include="..\Build\System.Memory.dll" />
+      <ReleaseFiles Include="..\Build\System.Net.Http.Formatting.dll" />
+      <ReleaseFiles Include="..\Build\System.Runtime.CompilerServices.Unsafe.dll" />
+      <ReleaseFiles Include="..\Build\System.Security.AccessControl.dll" />
+      <ReleaseFiles Include="..\Build\System.Security.Permissions.dll" />
+      <ReleaseFiles Include="..\Build\System.Security.Principal.Windows.dll" />
+      <ReleaseFiles Include="..\Build\System.ValueTuple.dll" />
+      <ReleaseFiles Include="..\Build\System.Web.http.dll" />
+      <ReleaseFiles Include="..\Build\System.Web.Http.SelfHost.dll" />
+      <ReleaseFiles Include="..\Build\Theraot.Core.dll" />
+      <ReleaseFiles Include="..\Build\Vanara.Core.dll" />
+      <ReleaseFiles Include="..\Build\Vanara.PInvoke.Kernel32.dll" />
+      <ReleaseFiles Include="..\Build\Vanara.PInvoke.Shared.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\alkahest-csharp.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\alkahest-csharp.dll.config" />
+      <ReleaseFiles Include="..\Build\Plugins\alkahest-packet-logger.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\alkahest-packet-logger.dll.config" />
+      <ReleaseFiles Include="..\Build\Plugins\alkahest-simple-test.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.CSharp.Features.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.CSharp.Scripting.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.CSharp.Workspaces.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.CSharp.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.Features.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.Scripting.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.VisualBasic.Features.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.VisualBasic.Workspaces.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.VisualBasic.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.Workspaces.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.CodeAnalysis.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Microsoft.DiaSymReader.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Collections.Immutable.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Composition.AttributedModel.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Composition.Convention.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Composition.Hosting.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Composition.Runtime.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Composition.TypedParts.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Numerics.Vectors.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Reflection.Metadata.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Text.Encoding.CodePages.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\System.Threading.Tasks.Extensions.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.ComCtl32.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Cryptography.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Gdi32.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Mpr.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.NtDll.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Ole.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Security.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.Shell32.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.ShlwApi.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.User32.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.User32.Gdi.dll" />
+      <ReleaseFiles Include="..\Build\Plugins\Vanara.PInvoke.WinINet.dll" />
     </ItemGroup>
     <Assembly TaskAction="GetInfo" NetAssembly="..\Build\Alkahest.Core.dll">
       <Output TaskParameter="OutputItems" ItemName="AlkahestInfo" />
     </Assembly>
-    <Zip ZipFileName="..\Build\Alkahest-%(AlkahestInfo.AssemblyInformationalVersion).zip" WorkingDirectory="..\Build" Files="@(ReleaseFiles)" />
+    <PropertyGroup>
+      <ReleaseVersion>%(AlkahestInfo.AssemblyInformationalVersion)</ReleaseVersion>
+    </PropertyGroup>
+    <Zip ZipFileName="..\Build\Alkahest-$(ReleaseVersion.Substring(0, $(ReleaseVersion.IndexOf('+')))).zip" WorkingDirectory="..\Build" Files="@(ReleaseFiles)" />
   </Target>
   <Target Name="Clean">
-    <Delete Files="..\Build\Alkahest-*.zip" />
+    <ItemGroup>
+      <CleanFiles Include="..\Build\Alkahest-*.zip" />
+    </ItemGroup>
+    <Delete Files="@(CleanFiles)" />
   </Target>
   <Target Name="Rebuild" DependsOnTargets="Clean; Build" />
 </Project>

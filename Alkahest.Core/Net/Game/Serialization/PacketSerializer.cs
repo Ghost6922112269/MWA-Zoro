@@ -9,11 +9,6 @@ namespace Alkahest.Core.Net.Game.Serialization
 {
     public abstract class PacketSerializer
     {
-        internal const BindingFlags FieldFlags =
-            BindingFlags.DeclaredOnly |
-            BindingFlags.Instance |
-            BindingFlags.Public;
-
         static readonly Log _log = new Log(typeof(PacketSerializer));
 
         public Region Region { get; }
@@ -130,11 +125,14 @@ namespace Alkahest.Core.Net.Game.Serialization
             if (packet == null)
                 throw new ArgumentNullException(nameof(packet));
 
+            if (!_byType.TryGetValue(packet.GetType(), out var info))
+                throw new UnmappedMessageException();
+
             packet.OnSerialize(this);
 
             using var writer = new GameBinaryWriter();
 
-            OnSerialize(writer, _byType[packet.GetType()], packet);
+            OnSerialize(writer, info, packet);
 
             return writer.ToArray();
         }
@@ -142,17 +140,17 @@ namespace Alkahest.Core.Net.Game.Serialization
         protected abstract void OnDeserialize(GameBinaryReader reader, PacketInfo info,
             SerializablePacket packet);
 
-        public void Deserialize(byte[] payload, SerializablePacket packet)
+        public void Deserialize(byte[] buffer, int index, int count, SerializablePacket packet)
         {
-            if (payload == null)
-                throw new ArgumentNullException(nameof(payload));
-
             if (packet == null)
                 throw new ArgumentNullException(nameof(packet));
 
-            using var reader = new GameBinaryReader(payload);
+            if (!_byType.TryGetValue(packet.GetType(), out var info))
+                throw new UnmappedMessageException();
 
-            OnDeserialize(reader, _byType[packet.GetType()], packet);
+            using var reader = new GameBinaryReader(buffer, index, count);
+
+            OnDeserialize(reader, info, packet);
 
             packet.OnDeserialize(this);
         }

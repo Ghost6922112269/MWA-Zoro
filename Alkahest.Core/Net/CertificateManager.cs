@@ -52,40 +52,53 @@ namespace Alkahest.Core.Net
                 (string)null, StorageFlags);
             Encryption = new X509Certificate2(ReadCertificate($"{nameof(Alkahest)}.pfx"),
                 (string)null, StorageFlags);
-
-            _store.Open(OpenFlags.ReadWrite);
-            AddKeys();
-
-            NetShellRemove(false);
-            InvokeNetShell($"add sslcert ipport=0.0.0.0:{port} certstorename={StoreName.Root} " +
-                $"certhash={Encryption.Thumbprint} appid={{{Guid.NewGuid()}}}", true);
-
-            _log.Basic("Installed root certificates");
         }
 
         ~CertificateManager()
         {
-            RealDispose();
+            RealDispose(false);
         }
 
         public void Dispose()
         {
-            RealDispose();
+            RealDispose(true);
             GC.SuppressFinalize(this);
         }
 
-        void RealDispose()
+        void RealDispose(bool disposing)
         {
             if (_disposed)
                 return;
 
             _disposed = true;
 
-            NetShellRemove(true);
+            if (_store == null)
+                return;
+
+            NetShellRemove();
+
+            _store.Open(OpenFlags.ReadWrite);
             RemoveKeys();
             _store.Dispose();
 
-            _log.Basic("Uninstalled root certificates");
+            if (disposing)
+                _log.Basic("Uninstalled root certificates");
+        }
+
+        public void Activate()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(GetType().FullName);
+
+            _store.Open(OpenFlags.ReadWrite);
+            AddKeys();
+            _store.Close();
+
+            NetShellRemove();
+            InvokeNetShell("add", $"certstorename={StoreName.Root} certhash={Encryption.Thumbprint} " +
+                $"appid={{{Guid.NewGuid()}}}", true);
+
+            _log.Basic("Installed root certificates");
         }
 
         void AddKeys()
@@ -100,18 +113,18 @@ namespace Alkahest.Core.Net
             _store.Remove(Signature);
         }
 
-        void NetShellRemove(bool check)
+        void NetShellRemove()
         {
-            InvokeNetShell($"del sslcert ipport=0.0.0.0:{_port}", check);
+            InvokeNetShell("del", string.Empty, false);
         }
 
-        static void InvokeNetShell(string arguments, bool check)
+        void InvokeNetShell(string command, string arguments, bool check)
         {
-            using var proc = new Process()
+            using var proc = new Process
             {
                 StartInfo =
                 {
-                    Arguments = $"http {arguments}",
+                    Arguments = $"http {command} sslcert ipport=0.0.0.0:{_port} {arguments}",
                     FileName = _exePath,
                     RedirectStandardError = true,
                     RedirectStandardInput = true,

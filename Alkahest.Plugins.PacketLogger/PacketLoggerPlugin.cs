@@ -1,6 +1,4 @@
-using Alkahest.Core;
 using Alkahest.Core.Logging;
-using Alkahest.Core.Net.Game;
 using Alkahest.Core.Net.Game.Logging;
 using Alkahest.Core.Plugins;
 using System;
@@ -10,43 +8,46 @@ namespace Alkahest.Plugins.PacketLogger
 {
     public sealed class PacketLoggerPlugin : IPlugin
     {
-        public string Name { get; } = "packet-logger";
+        public string Name => "packet-logger";
 
         static readonly Log _log = new Log(typeof(PacketLoggerPlugin));
 
+        readonly PluginContext _context;
+
         PacketLogWriter _writer;
 
-        public void Start(PluginContext context, GameProxy[] proxies)
+#pragma warning disable IDE0051 // Remove unused private members
+        PacketLoggerPlugin(PluginContext context)
+#pragma warning restore IDE0051 // Remove unused private members
         {
-            var serializer = proxies.First().Processor.Serializer;
+            _context = context;
+        }
+
+        public void Start()
+        {
+            var serializer = _context.Serializer;
 
             _writer = new PacketLogWriter(serializer.Region, serializer.GameMessages,
-                serializer.SystemMessages, proxies.Select(x => x.Info).ToArray(),
+                serializer.SystemMessages, _context.Proxies.Select(x => x.Info).ToArray(),
                 Configuration.LogDirectory, Configuration.LogFileNameFormat,
                 Configuration.CompressLogs);
 
-            foreach (var proxy in proxies)
-                proxy.Processor.AddRawHandler(PacketLogHandler);
+            _context.Dispatch.AddHandler((client, direction, code, packet, flags) =>
+            {
+                _writer.Write(new PacketLogEntry(DateTime.Now, client.Proxy.Info.Id, direction,
+                    code, packet.Payload));
+
+                return true;
+            }, new PacketFilter(long.MinValue).WithSilenced(null));
 
             _log.Basic("Packet logger plugin started");
         }
 
-        public void Stop(PluginContext context, GameProxy[] proxies)
+        public void Stop()
         {
-            foreach (var proxy in proxies)
-                proxy.Processor.RemoveRawHandler(PacketLogHandler);
-
             _writer.Dispose();
 
             _log.Basic("Packet logger plugin stopped");
-        }
-
-        bool PacketLogHandler(GameClient client, Direction direction, RawPacket packet)
-        {
-            _writer.Write(new PacketLogEntry(DateTime.Now, client.Proxy.Info.Id, direction,
-                client.Proxy.Processor.Serializer.GameMessages.NameToCode[packet.Name], packet.Payload));
-
-            return true;
         }
     }
 }

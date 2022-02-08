@@ -1,4 +1,6 @@
 using Alkahest.Core.IO;
+using System.IO;
+using System.Threading;
 
 namespace Alkahest.Core.Data
 {
@@ -10,7 +12,7 @@ namespace Alkahest.Core.Data
 
         public byte[] Data { get; }
 
-        GameBinaryReader _reader;
+        readonly ThreadLocal<GameBinaryReader> _reader = new ThreadLocal<GameBinaryReader>();
 
         public DataCenterSimpleRegion(uint elementSize, uint count, byte[] data)
         {
@@ -21,11 +23,14 @@ namespace Alkahest.Core.Data
 
         public GameBinaryReader GetReader(uint elementIndex)
         {
-            _reader ??= new GameBinaryReader(Data);
+            if (elementIndex >= Count)
+                throw new InvalidDataException($"Element index {elementIndex} is greater than {Count}.");
 
-            _reader.Position = (int)(elementIndex * ElementSize);
+            var reader = _reader.Value ??= new GameBinaryReader(Data);
 
-            return _reader;
+            reader.Position = (int)(elementIndex * ElementSize);
+
+            return reader;
         }
     }
 }

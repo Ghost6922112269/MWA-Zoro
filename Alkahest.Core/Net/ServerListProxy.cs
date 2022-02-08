@@ -36,16 +36,16 @@ namespace Alkahest.Core.Net
 
         ~ServerListProxy()
         {
-            RealDispose();
+            RealDispose(false);
         }
 
         public void Dispose()
         {
-            RealDispose();
+            RealDispose(true);
             GC.SuppressFinalize(this);
         }
 
-        void RealDispose()
+        void RealDispose(bool disposing)
         {
             if (_disposed)
                 return;
@@ -57,11 +57,15 @@ namespace Alkahest.Core.Net
 
             _server.CloseAsync().Wait();
 
-            _log.Basic("{0} server list proxy stopped", Parameters.Region);
+            if (disposing)
+                _log.Basic("{0} server list proxy stopped", Parameters.Region);
         }
 
         public void Start()
         {
+            if (_disposed)
+                throw new ObjectDisposedException(GetType().FullName);
+
             _server.OpenAsync().Wait();
 
             _log.Basic("{0} server list proxy listening at {1}", Parameters.Region,

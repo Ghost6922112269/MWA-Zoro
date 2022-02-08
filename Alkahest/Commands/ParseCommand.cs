@@ -1,4 +1,5 @@
 using Alkahest.Core;
+using Alkahest.Core.Collections;
 using Alkahest.Core.Logging;
 using Alkahest.Core.Net.Game;
 using Alkahest.Core.Net.Game.Logging;
@@ -213,7 +214,7 @@ namespace Alkahest.Commands
         {
             stats.TotalPackets++;
 
-            var name = serializer.GameMessages.CodeToName[entry.MessageCode];
+            var name = serializer.GameMessages.CodeToName[entry.Code];
 
             if (_regexes.All(r => !r.IsMatch(name)))
             {
@@ -223,10 +224,10 @@ namespace Alkahest.Commands
 
             result.WriteLine("[{0:yyyy-MM-dd HH:mm:ss:fff}] {1} {2}: {3} ({4} bytes)",
                 entry.Timestamp.ToLocalTime(), reader.Servers[entry.ServerId].Name,
-                entry.Direction.ToDirectionString(), name, entry.Payload.Count);
+                entry.Direction.ToDirectionString(), name, entry.Payload.Length);
 
-            var parsed = serializer.Create(entry.MessageCode);
-            var payload = entry.Payload.ToArray();
+            var parsed = serializer.Create(entry.Code);
+            var payload = entry.Payload;
 
             if (payload.Length != 0)
             {
@@ -235,7 +236,7 @@ namespace Alkahest.Commands
                     result.WriteLine();
                     result.WriteLine(new RawPacket(name)
                     {
-                        Payload = payload,
+                        Payload = payload.AsMemory(),
                     });
                 }
 
@@ -281,23 +282,29 @@ namespace Alkahest.Commands
             {
                 stats.ParsedPackets++;
 
-                serializer.Deserialize(payload, parsed);
+                var seg = payload.GetArray();
+
+                serializer.Deserialize(seg.Array, seg.Offset, seg.Count, parsed);
 
                 for (var i = 0; i < _roundtrips; i++)
                 {
-                    var payload2 = serializer.Serialize(parsed);
+                    var payload2 = serializer.Serialize(parsed).AsMemory();
                     var len = payload.Length;
                     var len2 = payload2.Length;
 
                     Assert.Check(len2 == len,
-                        $"Payload lengths for {name} don't match ({len2} versus {len}).");
+                        $"Payload lengths for {name} do not match ({len2} versus {len}).");
 
                     if (i > 0)
-                        Assert.Check(payload2.SequenceEqual(payload),
-                            $"Payloads for {name} don't match after roundtrip.");
+                        Assert.Check(payload2.Span.SequenceEqual(payload.Span),
+                            $"Payloads for {name} do not match after roundtrip.");
 
                     if (i != _roundtrips - 1)
-                        serializer.Deserialize(payload2, parsed);
+                    {
+                        var seg2 = payload2.GetArray();
+
+                        serializer.Deserialize(seg2.Array, seg2.Offset, seg2.Count, parsed);
+                    }
 
                     payload = payload2;
                 }
@@ -315,7 +322,7 @@ namespace Alkahest.Commands
             {
                 static void PrintValue(string name, int value, string trail = "")
                 {
-                    _log.Info("{0,17}: {1}{2}", name, value, trail);
+                    _log.Info("  {0,17}: {1}{2}", name, value, trail);
                 }
 
                 static void PrintPercentageValue(string name, int value, int total)
@@ -343,7 +350,6 @@ namespace Alkahest.Commands
                 PrintRelevantPacketValue("Parsed packets", stats.ParsedPackets);
                 PrintValue("Potential arrays", stats.PotentialArrays);
                 PrintValue("Potential strings", stats.PotentialStrings);
-                _log.Info(string.Empty);
             }
 
             if (_summary)
@@ -359,22 +365,27 @@ namespace Alkahest.Commands
                         $" ({(double)entry.Count / total:P2})" : string.Empty);
                     _log.Info("    Sizes: Min = {0}, Max = {1}, Avg = {2}", sizes.Min(), sizes.Max(),
                         (int)sizes.Average());
-                    _log.Info(string.Empty);
                 }
 
                 void PrintSummaryList(string header, bool known)
                 {
-                    var packets = stats.Packets.Where(x => x.Value.IsKnown == known).OrderBy(x => x.Key);
+                    var packets = stats.Packets.Where(x => x.Value.IsKnown == known)
+                        .OrderBy(x => x.Key).ToArray();
 
-                    if (!packets.Any())
+                    if (packets.Length == 0)
                         return;
 
                     _log.Info(string.Empty);
                     _log.Info($"{header}:");
                     _log.Info(string.Empty);
 
-                    foreach (var kvp in packets)
+                    foreach (var (i, kvp) in packets.WithIndex())
+                    {
                         PrintSummary(kvp);
+
+                        if (i != packets.Length - 1)
+                            _log.Info(string.Empty);
+                    }
                 }
 
                 PrintSummaryList("Known packets", true);

@@ -1,9 +1,10 @@
 using Alkahest.Core.IO;
+using System.IO;
 using System.Threading;
 
 namespace Alkahest.Core.Data
 {
-    sealed class DataCenterSegment
+    sealed class DataCenterRegion
     {
         public uint ElementSize { get; }
 
@@ -15,8 +16,12 @@ namespace Alkahest.Core.Data
 
         readonly ThreadLocal<GameBinaryReader> _reader = new ThreadLocal<GameBinaryReader>();
 
-        public DataCenterSegment(uint elementSize, uint fullCount, uint usedCount, byte[] data)
+        public DataCenterRegion(uint elementSize, uint fullCount, uint usedCount, byte[] data)
         {
+            if (usedCount > fullCount)
+                throw new InvalidDataException(
+                    $"Used count {usedCount} is greater than full count {fullCount}.");
+
             ElementSize = elementSize;
             FullCount = fullCount;
             UsedCount = usedCount;
@@ -25,6 +30,9 @@ namespace Alkahest.Core.Data
 
         public GameBinaryReader GetReader(uint elementIndex)
         {
+            if (elementIndex >= UsedCount)
+                throw new InvalidDataException($"Element index {elementIndex} is greater than {UsedCount}.");
+
             var reader = _reader.Value ??= new GameBinaryReader(Data);
 
             reader.Position = (int)(elementIndex * ElementSize);

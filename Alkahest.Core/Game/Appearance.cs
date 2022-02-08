@@ -2,13 +2,9 @@ using System;
 
 namespace Alkahest.Core.Game
 {
-    public struct Appearance : IEquatable<Appearance>
+    public readonly struct Appearance : IEquatable<Appearance>
     {
-        public static readonly Appearance Default = default;
-
-        public readonly ulong Raw;
-
-        public bool IsDefault => this == Default;
+        public ulong Raw { get; }
 
         public byte Unknown => (byte)Bits.Extract(Raw, 0, 8);
 

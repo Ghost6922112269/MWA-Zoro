@@ -1,6 +1,9 @@
 using Alkahest.Core.Logging;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Alkahest.Packager
 {
@@ -8,7 +11,7 @@ namespace Alkahest.Packager
     {
         static readonly Log _log = new Log(typeof(AssetManager));
 
-        readonly DataCenterAsset _dc;
+        readonly IReadOnlyList<IAsset> _dataCenters;
 
         public AssetManager()
         {
@@ -18,37 +21,53 @@ namespace Alkahest.Packager
 
             _log.Info("Fetching asset manifest...");
 
-            var json = GitHub.GetString(Configuration.AssetManifestUri);
-            var manifest = JObject.Parse(json);
-            var region = Configuration.Region.ToString().ToLowerInvariant();
-            var obj = manifest[region];
+            var json = JObject.Parse(GitHub.GetString(Configuration.AssetManifestUri));
 
-            if (obj == null)
-                _log.Warning("{0} data center file not available", region);
-            else
-                _dc = new DataCenterAsset(assets, (JObject)obj);
+            _log.Info("Loading local assets...");
+
+            var dcs = new List<IAsset>();
+
+            foreach (var region in Configuration.Regions)
+                dcs.Add(new DataCenterAsset(assets, region,
+                    (JObject)json[region.ToString().ToLowerInvariant()]));
+
+            _dataCenters = dcs;
         }
 
-        public void UpdateDataCenter()
+        static void Update(IAsset asset)
         {
-            if (_dc == null)
-                return;
-
-            if (!_dc.CheckIfLatest())
+            if (!asset.CheckIfLatest())
             {
-                _log.Basic("Asset {0} is out of date; updating...", _dc.File);
+                _log.Basic("Asset {0} is out of date; updating...", asset.File);
 
-                _dc.Update();
+                asset.Update();
 
-                _log.Info("Asset {0} updated", _dc.File);
+                _log.Info("Asset {0} updated", asset.File);
             }
             else
-                _log.Info("Asset {0} is up to date", _dc.File);
+                _log.Info("Asset {0} is up to date", asset.File);
+        }
+
+        void UpdateDataCenters()
+        {
+            foreach (var dc in _dataCenters.OfType<DataCenterAsset>())
+                Update(dc);
+        }
+
+        public void Update(AssetKind kind)
+        {
+            switch (kind)
+            {
+                case AssetKind.DataCenter:
+                    UpdateDataCenters();
+                    break;
+            }
         }
 
         public void UpdateAll()
         {
-            UpdateDataCenter();
+            foreach (var kind in (AssetKind[])Enum.GetValues(typeof(AssetKind)))
+                Update(kind);
         }
     }
 }

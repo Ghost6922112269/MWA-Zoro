@@ -31,97 +31,103 @@ namespace Alkahest.Core.Net.Game.Logging
         {
             Stream stream = File.OpenRead(fileName);
 
-            var magic = new byte[PacketLogEntry.Magic.Count];
+            using var reader = new GameBinaryReader(stream, true);
 
-            if (stream.Read(magic, 0, magic.Length) != magic.Length)
-                throw new EndOfStreamException();
+            if (!reader.ReadBytes(PacketLogEntry.Magic.Count).SequenceEqual(PacketLogEntry.Magic))
+                throw new InvalidDataException("Invalid magic number.");
 
-            if (!magic.SequenceEqual(PacketLogEntry.Magic))
-                throw new InvalidDataException();
-
-            var level = stream.ReadByte();
-
-            if (level == -1)
-                throw new EndOfStreamException();
-
-            if ((CompressionLevel = (byte)level) != 0)
-                stream = new DeflateStream(stream, CompressionMode.Decompress);
-
-            _reader = new GameBinaryReader(stream);
-            Version = _reader.ReadUInt32();
+            Version = reader.ReadUInt32();
 
             if (Version != PacketLogEntry.Version)
-                throw new InvalidDataException();
+                throw new InvalidDataException($"Unknown format version {Version}.");
 
-            Region = (Region)_reader.ReadByte();
+            Region = (Region)reader.ReadByte();
 
             if (!Enum.IsDefined(typeof(Region), Region))
-                throw new InvalidDataException();
+                throw new InvalidDataException($"Unknown region value {Region}.");
 
-            var clientVersion = _reader.ReadUInt32();
+            var clientVersion = reader.ReadUInt32();
 
-            if (!DataCenter.Versions.Values.Contains(clientVersion))
-                throw new InvalidDataException();
+            if (!DataCenter.ClientVersions.Values.Contains(clientVersion))
+                throw new InvalidDataException($"Unknown client version {clientVersion}.");
 
             GameMessages = new GameMessageTable(clientVersion);
             SystemMessages = new SystemMessageTable(clientVersion);
 
-            var serverCount = (int)_reader.ReadUInt32();
-
-            if (serverCount < 0)
-                throw new InvalidDataException();
-
+            var serverCount = (int)reader.ReadUInt32();
             var servers = new Dictionary<int, ServerInfo>(serverCount);
 
             for (var i = 0; i < serverCount; i++)
             {
-                var id = _reader.ReadInt32();
+                var id = reader.ReadInt32();
 
                 if (servers.ContainsKey(id))
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Duplicate server ID {id}.");
 
-                var name = _reader.ReadString();
-                var size = _reader.ReadBoolean() ? 16 : 4;
-                var realIPBytes = _reader.ReadBytes(size);
-                var realPort = _reader.ReadUInt16();
-                var proxyIPBytes = _reader.ReadBytes(size);
-                var proxyPort = _reader.ReadUInt16();
+                var name = reader.ReadString();
+                var size = reader.ReadBoolean() ? 16 : 4;
+                var realIPBytes = reader.ReadBytes(size);
+                var realPort = reader.ReadUInt16();
+                var proxyIPBytes = reader.ReadBytes(size);
+                var proxyPort = reader.ReadUInt16();
 
                 IPEndPoint realEP;
-                IPEndPoint proxyEP;
 
                 try
                 {
                     realEP = new IPEndPoint(new IPAddress(realIPBytes), realPort);
-                    proxyEP = new IPEndPoint(new IPAddress(proxyIPBytes), proxyPort);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    throw new InvalidDataException($"Invalid real port {realPort}.");
                 }
                 catch (ArgumentException)
                 {
-                    throw new InvalidDataException();
+                    throw new InvalidDataException("Invalid real IP address.");
+                }
+
+                IPEndPoint proxyEP;
+
+                try
+                {
+                    proxyEP = new IPEndPoint(new IPAddress(proxyIPBytes), proxyPort);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    throw new InvalidDataException($"Invalid proxy port {proxyPort}.");
+                }
+                catch (ArgumentException)
+                {
+                    throw new InvalidDataException("Invalid proxy IP address.");
                 }
 
                 servers.Add(id, new ServerInfo(id, name, realEP, proxyEP));
             }
 
             Servers = servers;
+            CompressionLevel = reader.ReadByte();
+
+            _reader = new GameBinaryReader(CompressionLevel != 0 ?
+                new FastDeflateStream(stream, CompressionMode.Decompress) : stream);
         }
 
         ~PacketLogReader()
         {
-            RealDispose();
+            RealDispose(false);
         }
 
         public void Dispose()
         {
-            RealDispose();
+            RealDispose(true);
             GC.SuppressFinalize(this);
         }
 
-        void RealDispose()
+        void RealDispose(bool disposing)
         {
             _disposed = true;
 
-            _reader?.Dispose();
+            if (disposing)
+                _reader.Dispose();
         }
 
         public PacketLogEntry Read()
@@ -131,32 +137,33 @@ namespace Alkahest.Core.Net.Game.Logging
 
             try
             {
+                var time = _reader.ReadInt64();
+
                 DateTime stamp;
 
                 try
                 {
-                    stamp = DateTimeOffset.FromUnixTimeMilliseconds(
-                        _reader.ReadInt64()).LocalDateTime;
+                    stamp = DateTimeOffset.FromUnixTimeMilliseconds(time).LocalDateTime;
                 }
                 catch (ArgumentOutOfRangeException)
                 {
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Invalid timestamp value {time}.");
                 }
 
                 var id = _reader.ReadInt32();
 
                 if (!Servers.ContainsKey(id))
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Invalid server ID {id}.");
 
                 var direction = (Direction)_reader.ReadByte();
 
                 if (!Enum.IsDefined(typeof(Direction), direction))
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Unknown direction value {direction}.");
 
                 var code = _reader.ReadUInt16();
 
                 if (!GameMessages.CodeToName.ContainsKey(code))
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Unknown message code {code}.");
 
                 var length = _reader.ReadUInt16();
                 var payload = _reader.ReadBytes(length);
@@ -179,7 +186,7 @@ namespace Alkahest.Core.Net.Game.Logging
             if (_disposed)
                 throw new ObjectDisposedException(GetType().FullName);
 
-            IEnumerable<PacketLogEntry> Enumerate()
+            IEnumerable<PacketLogEntry> Iterator()
             {
                 PacketLogEntry entry;
 
@@ -187,7 +194,7 @@ namespace Alkahest.Core.Net.Game.Logging
                     yield return entry;
             }
 
-            return Enumerate();
+            return Iterator();
         }
     }
 }

@@ -72,53 +72,57 @@ namespace Alkahest.Commands
             var directories = 0;
             var files = 0;
 
-            using var dc = new DataCenter(input, Configuration.DataCenterInterning);
+            using var stream = File.OpenRead(input);
+            var dc = new DataCenter(stream, Configuration.DataCenterMode,
+                Configuration.DataCenterStringOptions);
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = _parallel ? Environment.ProcessorCount : 1,
             };
+            var work = dc.Root.Children().GroupBy(x => x.Name, (name, elems) =>
+                elems.WithIndex().Select(x => (name, elem: x.Item2, idx: x.Item1))).SelectMany(x => x);
             var settings = new XmlWriterSettings
             {
                 Indent = true,
             };
 
-            Parallel.ForEach(dc.Root.GroupBy(x => x.Name), options, grp =>
+            Parallel.ForEach(work, options, item =>
             {
-                var dir = Path.Combine(_output, grp.Key);
+                var dir = Path.Combine(_output, item.name);
 
-                Directory.CreateDirectory(dir);
-                Interlocked.Increment(ref directories);
-
-                foreach (var (i, elem) in grp.WithIndex())
+                lock (dc)
                 {
-                    using (elem)
+                    if (!Directory.Exists(dir))
                     {
-                        switch (_format)
-                        {
-                            case DumpFormat.Xml:
-                            {
-                                using var writer = XmlWriter.Create(Path.Combine(
-                                    dir, $"{grp.Key}-{i}.xml"), settings);
-
-                                WriteElement(writer, elem);
-                                break;
-                            }
-                            case DumpFormat.Json:
-                            {
-                                using var writer = new JsonTextWriter(new StreamWriter(
-                                    Path.Combine(dir, $"{grp.Key}-{i}.json")))
-                                {
-                                    Formatting = Newtonsoft.Json.Formatting.Indented,
-                                };
-
-                                WriteElement(writer, elem);
-                                break;
-                            }
-                        }
+                        Directory.CreateDirectory(dir);
+                        Interlocked.Increment(ref directories);
                     }
+                }
 
-                    Interlocked.Increment(ref files);
-                };
+                switch (_format)
+                {
+                    case DumpFormat.Xml:
+                    {
+                        using var writer = XmlWriter.Create(Path.Combine(
+                            dir, $"{item.name}-{item.idx}.xml"), settings);
+
+                        WriteElement(writer, item.elem);
+                        break;
+                    }
+                    case DumpFormat.Json:
+                    {
+                        using var writer = new JsonTextWriter(new StreamWriter(
+                            Path.Combine(dir, $"{item.name}-{item.idx}.json")))
+                        {
+                            Formatting = Newtonsoft.Json.Formatting.Indented,
+                        };
+
+                        WriteElement(writer, item.elem);
+                        break;
+                    }
+                }
+
+                Interlocked.Increment(ref files);
             });
 
             _log.Basic("Dumped {0} directories and {1} files", directories, files);
@@ -130,10 +134,10 @@ namespace Alkahest.Commands
         {
             writer.WriteStartElement(element.Name);
 
-            foreach (var (name, attr) in element.Attributes.Tuples())
-                writer.WriteAttributeString(name, attr.Value.ToString());
+            foreach (var (name, value) in element.Attributes.Tuples())
+                writer.WriteAttributeString(name, value.ToString());
 
-            foreach (var elem in element)
+            foreach (var elem in element.Children())
                 WriteElement(writer, elem);
 
             writer.WriteEndElement();
@@ -143,28 +147,28 @@ namespace Alkahest.Commands
         {
             writer.WriteStartObject();
 
-            foreach (var (name, attr) in element.Attributes.Tuples())
+            foreach (var (name, value) in element.Attributes.Tuples())
             {
                 writer.WritePropertyName(name);
 
-                switch (attr.TypeCode)
+                switch (value.TypeCode)
                 {
                     case DataCenterTypeCode.Int32:
-                        writer.WriteValue(attr.AsInt32);
+                        writer.WriteValue(value.AsInt32);
                         break;
                     case DataCenterTypeCode.Single:
-                        writer.WriteValue(attr.AsSingle);
+                        writer.WriteValue(value.AsSingle);
                         break;
                     case DataCenterTypeCode.String:
-                        writer.WriteValue(attr.AsString);
+                        writer.WriteValue(value.AsString);
                         break;
                     case DataCenterTypeCode.Boolean:
-                        writer.WriteValue(attr.AsBoolean);
+                        writer.WriteValue(value.AsBoolean);
                         break;
                 }
             }
 
-            foreach (var grp in element.GroupBy(x => x.Name))
+            foreach (var grp in element.Children().GroupBy(x => x.Name))
             {
                 writer.WritePropertyName(grp.Key);
                 writer.WriteStartArray();

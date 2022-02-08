@@ -4,13 +4,16 @@ using System.Runtime.InteropServices;
 namespace Alkahest.Core.Data
 {
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    struct DataCenterAddress : IEquatable<DataCenterAddress>
+    readonly struct DataCenterAddress : IEquatable<DataCenterAddress>
     {
-        public static readonly DataCenterAddress Zero = new DataCenterAddress();
+        public static readonly DataCenterAddress Zero = default;
 
-        public readonly ushort SegmentIndex;
+        public static readonly DataCenterAddress Invalid =
+            new DataCenterAddress(ushort.MaxValue, ushort.MaxValue);
 
-        public readonly ushort ElementIndex;
+        public ushort SegmentIndex { get; }
+
+        public ushort ElementIndex { get; }
 
         public DataCenterAddress(ushort segmentIndex, ushort elementIndex)
         {
@@ -43,6 +46,11 @@ namespace Alkahest.Core.Data
         public static bool operator !=(DataCenterAddress a, DataCenterAddress b)
         {
             return !a.Equals(b);
+        }
+
+        public override string ToString()
+        {
+            return $"{SegmentIndex}:{ElementIndex}";
         }
     }
 }

@@ -2,7 +2,6 @@ using Alkahest.Core.IO;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Net.Sockets;
 
@@ -10,9 +9,9 @@ namespace Alkahest.Core.Net.Game.Logging
 {
     public sealed class PacketLogWriter : IDisposable
     {
-        public bool IsCompressed { get; }
+        public byte CompressionLevel { get; }
 
-        public uint Version { get; } = PacketLogEntry.Version;
+        public uint Version => PacketLogEntry.Version;
 
         public Region Region { get; }
 
@@ -38,7 +37,7 @@ namespace Alkahest.Core.Net.Game.Logging
             if (fileNameFormat == null)
                 throw new ArgumentNullException(nameof(fileNameFormat));
 
-            IsCompressed = compress;
+            CompressionLevel = (byte)(compress ? 6 : 0);
             Region = region.CheckValidity(nameof(region));
             GameMessages = gameMessages ?? throw new ArgumentNullException(nameof(gameMessages));
             SystemMessages = systemMessages ?? throw new ArgumentNullException(nameof(systemMessages));
@@ -46,53 +45,51 @@ namespace Alkahest.Core.Net.Game.Logging
 
             Directory.CreateDirectory(directory);
 
-            Stream stream = File.Open(
-                Path.Combine(directory, DateTime.Now.ToString(fileNameFormat) + ".pkt"),
+            Stream stream = File.Open(Path.Combine(directory, DateTime.Now.ToString(fileNameFormat) + ".pkt"),
                 FileMode.Create, FileAccess.Write);
 
-            var magic = PacketLogEntry.Magic.ToArray();
+            using var writer = new GameBinaryWriter(stream, true);
 
-            stream.Write(magic, 0, magic.Length);
-            stream.WriteByte((byte)(compress ? 6 : 0));
-
-            if (compress)
-                stream = new DeflateStream(stream, CompressionLevel.Optimal);
-
-            _writer = new GameBinaryWriter(stream);
-
-            _writer.WriteUInt32(Version);
-            _writer.WriteByte((byte)Region);
-            _writer.WriteUInt32(GameMessages.Version);
-            _writer.WriteUInt32((uint)servers.Length);
+            writer.WriteBytes(PacketLogEntry.Magic.ToArray());
+            writer.WriteUInt32(Version);
+            writer.WriteByte((byte)Region);
+            writer.WriteUInt32(GameMessages.Version);
+            writer.WriteUInt32((uint)servers.Length);
 
             foreach (var server in servers)
             {
-                _writer.WriteInt32(server.Id);
-                _writer.WriteString(server.Name);
-                _writer.WriteBoolean(server.RealEndPoint.AddressFamily == AddressFamily.InterNetworkV6);
-                _writer.WriteBytes(server.RealEndPoint.Address.GetAddressBytes());
-                _writer.WriteUInt16((ushort)server.RealEndPoint.Port);
-                _writer.WriteBytes(server.ProxyEndPoint.Address.GetAddressBytes());
-                _writer.WriteUInt16((ushort)server.ProxyEndPoint.Port);
+                writer.WriteInt32(server.Id);
+                writer.WriteString(server.Name);
+                writer.WriteBoolean(server.RealEndPoint.AddressFamily == AddressFamily.InterNetworkV6);
+                writer.WriteBytes(server.RealEndPoint.Address.GetAddressBytes());
+                writer.WriteUInt16((ushort)server.RealEndPoint.Port);
+                writer.WriteBytes(server.ProxyEndPoint.Address.GetAddressBytes());
+                writer.WriteUInt16((ushort)server.ProxyEndPoint.Port);
             }
+
+            writer.WriteByte(CompressionLevel);
+
+            _writer = new GameBinaryWriter(compress ?
+                new FastDeflateStream(stream, System.IO.Compression.CompressionLevel.Optimal) : stream);
         }
 
         ~PacketLogWriter()
         {
-            RealDispose();
+            RealDispose(false);
         }
 
         public void Dispose()
         {
-            RealDispose();
+            RealDispose(true);
             GC.SuppressFinalize(this);
         }
 
-        void RealDispose()
+        void RealDispose(bool disposing)
         {
             _disposed = true;
 
-            _writer?.Dispose();
+            if (disposing)
+                _writer.Dispose();
         }
 
         public void Write(PacketLogEntry entry)
@@ -103,7 +100,7 @@ namespace Alkahest.Core.Net.Game.Logging
             if (!Servers.ContainsKey(entry.ServerId))
                 throw new ArgumentException("Invalid server ID.", nameof(entry));
 
-            if (!GameMessages.CodeToName.ContainsKey(entry.MessageCode))
+            if (!GameMessages.CodeToName.ContainsKey(entry.Code))
                 throw new ArgumentException("Invalid game message code.", nameof(entry));
 
             if (_disposed)
@@ -112,9 +109,9 @@ namespace Alkahest.Core.Net.Game.Logging
             _writer.WriteInt64(new DateTimeOffset(entry.Timestamp).ToUnixTimeMilliseconds());
             _writer.WriteInt32(entry.ServerId);
             _writer.WriteByte((byte)entry.Direction);
-            _writer.WriteUInt16(entry.MessageCode);
-            _writer.WriteUInt16((ushort)entry.Payload.Count);
-            _writer.WriteBytes(entry.Payload.ToArray());
+            _writer.WriteUInt16(entry.Code);
+            _writer.WriteUInt16((ushort)entry.Payload.Length);
+            _writer.WriteBytes(entry.Payload.Span);
         }
     }
 }

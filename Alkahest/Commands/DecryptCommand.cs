@@ -1,4 +1,5 @@
 using Alkahest.Core.Cryptography;
+using Alkahest.Core.Data;
 using Alkahest.Core.IO;
 using Alkahest.Core.Logging;
 using Mono.Options;
@@ -14,8 +15,6 @@ namespace Alkahest.Commands
     {
         static readonly Log _log = new Log(typeof(DecryptCommand));
 
-        const string DecryptedExtension = "dec";
-
         string _output;
 
         public DecryptCommand()
@@ -29,7 +28,7 @@ namespace Alkahest.Commands
                 string.Empty,
                 {
                     "o|output=",
-                    $"Specify output file (defaults to input file name with extension changed to `{DecryptedExtension}`)",
+                    $"Specify output file (defaults to input file name with extension changed to `{DataCenter.UnpackedExtension}`)",
                     o => _output = o
                 },
             };
@@ -46,7 +45,7 @@ namespace Alkahest.Commands
             var input = args[0];
 
             if (_output == null)
-                _output = Path.ChangeExtension(input, DecryptedExtension);
+                _output = Path.ChangeExtension(input, DataCenter.UnpackedExtension);
 
             _log.Basic("Decrypting {0}...", input);
 
@@ -59,16 +58,18 @@ namespace Alkahest.Commands
             };
 
             using var transform = new PaddingCryptoTransform(aes.CreateDecryptor());
-            var stream = new CryptoStream(File.OpenRead(input), transform, CryptoStreamMode.Read);
-            using var reader = new BinaryReader(stream, GameBinaryReader.Encoding, true);
+            var decrypt = new CryptoStream(File.OpenRead(input), transform, CryptoStreamMode.Read);
+            using var reader = new BinaryReader(decrypt, GameBinaryReader.Encoding, true);
 
-            reader.ReadUInt32();
-            reader.ReadUInt16();
+            reader.ReadUInt32(); // Decompressed size.
 
-            using var stream2 = new DeflateStream(stream, CompressionMode.Decompress);
-            using var stream3 = File.Open(_output, FileMode.Create, FileAccess.Write);
+            if (reader.ReadUInt16() is var hdr && hdr != 0x9c78)
+                throw new InvalidDataException($"Invalid zlib header value {hdr}.");
 
-            stream2.CopyTo(stream3);
+            using var decompress = new FastDeflateStream(decrypt, CompressionMode.Decompress);
+            using var result = File.Open(_output, FileMode.Create, FileAccess.Write);
+
+            decompress.CopyTo(result);
 
             _log.Basic("Decrypted data center to {0}", _output);
 

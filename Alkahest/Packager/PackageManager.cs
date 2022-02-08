@@ -9,7 +9,11 @@ namespace Alkahest.Packager
 {
     sealed class PackageManager
     {
+        public const string PackageFileName = "package.json";
+
         public const string ManifestFileName = "manifest.json";
+
+        const string ConfigurationFileName = "config.json";
 
         static readonly Log _log = new Log(typeof(PackageManager));
 
@@ -21,49 +25,75 @@ namespace Alkahest.Packager
 
         public PackageManager()
         {
-            var csharp = Configuration.CSharpPackageDirectory;
-            var python = Configuration.PythonPackageDirectory;
+            var pkgs = Configuration.PackageDirectory;
 
-            Directory.CreateDirectory(csharp);
-            Directory.CreateDirectory(python);
+            Directory.CreateDirectory(pkgs);
 
             _log.Info("Fetching package registry...");
 
-            var json = GitHub.GetString(Configuration.PackageRegistryUri);
-            var manifest = JArray.Parse(json);
+            var registry = JArray.Parse(GitHub.GetString(Configuration.PackageRegistryUri))
+                .Select(x => new Package((JObject)x)).ToDictionary(x => x.Name);
 
-            Registry = manifest.Select(x => new Package((JObject)x)).ToDictionary(x => x.Name);
-
-            void CheckReferredPackages(bool dependencies)
+            foreach (var pkg in registry.Values.ToArray())
             {
-                foreach (var pkg in Registry.Values)
+                var abs = Path.GetFullPath(pkg.Path);
+                var bad = false;
+
+                void CheckReferredPackages(bool dependencies)
+                {
                     foreach (var name in dependencies ? pkg.Dependencies : pkg.Conflicts)
-                        if (!Registry.ContainsKey(name))
-                            _log.Warning("Package {0} has {1} package {2} which does not exist; ignoring",
+                    {
+                        if (!registry.ContainsKey(name))
+                        {
+                            _log.Warning("Package {0} has {1} package {2} which does not exist; ignoring package",
                                 pkg.Name, dependencies ? "dependency" : "conflicting", name);
+                            bad = true;
+                        }
+                    }
+                }
+
+                CheckReferredPackages(true);
+                CheckReferredPackages(false);
+
+                foreach (var file in pkg.Files)
+                {
+                    var loc = Path.GetFullPath(Path.Combine(abs, file));
+
+                    if (!loc.StartsWith(abs + Path.DirectorySeparatorChar) &&
+                        !loc.StartsWith(abs + Path.AltDirectorySeparatorChar))
+                    {
+                        _log.Warning("Package {0} has file path {1} which is illegal; ignoring package",
+                            pkg.Name, file);
+                        bad = true;
+                    }
+
+                    if (loc == Path.Combine(abs, PackageFileName) ||
+                        loc == Path.Combine(abs, ManifestFileName) ||
+                        loc == Path.Combine(abs, ConfigurationFileName))
+                    {
+                        _log.Warning("Package {0} has file path {1} which is for internal use; ignoring package",
+                            pkg.Name, file);
+                        bad = true;
+                    }
+                }
+
+                if (bad)
+                    registry.Remove(pkg.Name);
             }
 
-            CheckReferredPackages(true);
-            CheckReferredPackages(false);
+            Registry = registry;
 
             _log.Info("Reading local package manifests...");
 
-            void AddLocalPackages(PackageKind kind)
+            foreach (var dir in Directory.EnumerateDirectories(pkgs))
             {
-                foreach (var dir in Directory.EnumerateDirectories(
-                    kind == PackageKind.CSharp ? csharp : python))
-                {
-                    if (!File.Exists(Path.Combine(dir, ManifestFileName)))
-                        continue;
+                if (!File.Exists(Path.Combine(dir, ManifestFileName)))
+                    continue;
 
-                    var pkg = new LocalPackage(kind, Path.GetFileName(dir));
+                var pkg = new LocalPackage(Path.GetFileName(dir));
 
-                    _locals.Add(pkg.Name, pkg);
-                }
+                _locals.Add(pkg.Name, pkg);
             }
-
-            AddLocalPackages(PackageKind.CSharp);
-            AddLocalPackages(PackageKind.Python);
         }
 
         public void Install(Package package)

@@ -1,7 +1,6 @@
 using Alkahest.Core.Game;
 using Alkahest.Core.Net.Game;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using System.Text;
@@ -22,21 +21,28 @@ namespace Alkahest.Core.IO
 
         public int Length => (int)Stream.Length;
 
-        public bool EndOfStream => Position == Length;
+        public bool EndOfStream => Position >= Length;
+
+        char[] _string = new char[1];
 
         readonly BinaryReader _reader;
 
-        public GameBinaryReader(byte[] data)
-            : this(new MemoryStream(data, false))
+        public GameBinaryReader(byte[] buffer)
+            : this(new MemoryStream(buffer, false))
         {
         }
 
-        public GameBinaryReader(Stream stream)
-            : this(stream, false)
+        public GameBinaryReader(byte[] buffer, int index, int count)
+            : this(new MemoryStream(buffer, index, count, false))
         {
         }
 
-        public GameBinaryReader(Stream stream, bool leaveOpen)
+        public GameBinaryReader(ArraySegment<byte> segment)
+            : this(segment.Array, segment.Offset, segment.Count)
+        {
+        }
+
+        public GameBinaryReader(Stream stream, bool leaveOpen = false)
         {
             _reader = new BinaryReader(stream, Encoding, leaveOpen);
         }
@@ -103,14 +109,19 @@ namespace Alkahest.Core.IO
 
         public string ReadString()
         {
-            var list = new List<char>();
+            var pos = 0;
 
-            char c;
+            char value;
 
-            while ((c = (char)_reader.ReadUInt16()) != char.MinValue)
-                list.Add(c);
+            while ((value = (char)_reader.ReadUInt16()) != char.MinValue)
+            {
+                if (pos == _string.Length)
+                    Array.Resize(ref _string, Math.Max(_string.Length * 2, pos + 1));
 
-            return new string(list.ToArray());
+                _string[pos++] = value;
+            }
+
+            return new string(_string, 0, pos);
         }
 
         public Vector3 ReadVector3()
@@ -200,12 +211,20 @@ namespace Alkahest.Core.IO
         {
             using var stream = new MemoryStream(PacketHeader.MaxPayloadSize);
 
-            return Seek(0, (r, op) =>
+            var pos = Position;
+
+            try
             {
-                r.Stream.CopyTo(stream);
+                Position = 0;
+
+                Stream.CopyTo(stream);
 
                 return stream.ToArray();
-            });
+            }
+            finally
+            {
+                Position = pos;
+            }
         }
     }
 }

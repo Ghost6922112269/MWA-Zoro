@@ -1,3 +1,4 @@
+using Alkahest.Core.Collections;
 using Alkahest.Core.Logging;
 using Alkahest.Packager;
 using Mono.Options;
@@ -28,10 +29,11 @@ namespace Alkahest.Commands
             var regexes = args.Select(x => new Regex(x, SearchRegexOptions))
                 .DefaultIfEmpty(new Regex(".*", SearchRegexOptions));
             var mgr = new PackageManager();
+            var pkgs = mgr.Registry.Values.Where(pkg => regexes.All(
+                x => x.IsMatch(pkg.Name) || x.IsMatch(pkg.Description))).WithIndex().ToArray();
             var match = false;
 
-            foreach (var latest in mgr.Registry.Values.Where(pkg => regexes.All(
-                x => x.IsMatch(pkg.Name) || x.IsMatch(pkg.Description))))
+            foreach (var (i, latest) in pkgs)
             {
                 if (!match)
                 {
@@ -42,11 +44,18 @@ namespace Alkahest.Commands
                 _log.Basic("  {0} | {1} | https://github.com/{2}/{3}", latest.Name, latest.License,
                     latest.Owner, latest.Repository);
 
-                foreach (var line in latest.Description.Split('\n').Select(x => x.Trim()))
+                var desc = latest.Description.Split('\n').Select(x => x.Trim()).ToArray();
+
+                foreach (var (j, line) in desc.WithIndex())
                 {
                     _log.Basic("    {0}", line);
-                    _log.Basic(string.Empty);
+
+                    if (j != desc.Length - 1)
+                        _log.Basic(string.Empty);
                 }
+
+                if (i != pkgs.Length - 1)
+                    _log.Basic(string.Empty);
             }
 
             if (!match)
